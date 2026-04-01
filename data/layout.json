@@ -1,6 +1,6 @@
 {
   "background_image": "/uploads/Plates_for_Drawings00129775-20260331231646.jpg",
-  "updated_at": "2026-04-01T13:40:41.974777+00:00",
+  "updated_at": "2026-04-01T13:55:28.265104+00:00",
   "leds": [
     {
       "physical_id": 1,
@@ -37,10 +37,10 @@
     {
       "physical_id": 5,
       "display_name": "",
-      "x": null,
-      "y": null,
-      "key": "",
-      "placed": false
+      "x": 27.592,
+      "y": 55.794,
+      "key": "A",
+      "placed": true
     },
     {
       "physical_id": 6,

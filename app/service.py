@@ -75,15 +75,11 @@ class LedControlService:
         if actual_ids != expected_ids:
             raise ValueError("Layout must contain every physical LED exactly once.")
 
-        used_keys: dict[str, int] = {}
         for led in normalized["leds"]:
             key = led["key"]
             if key:
-                if key in used_keys:
-                    raise ValueError(f"Key '{key}' is already assigned to LED {used_keys[key]}.")
                 if key not in self.settings["allowed_keys"]:
                     raise ValueError(f"Key '{key}' is not in the allowed key list.")
-                used_keys[key] = led["physical_id"]
 
             if led["placed"]:
                 if led["x"] is None or led["y"] is None:
@@ -195,17 +191,19 @@ class LedControlService:
     def _led_lookup(self) -> dict[int, dict[str, Any]]:
         return {led["physical_id"]: led for led in self.layout["leds"]}
 
-    def _record_event(self, physical_id: int, active: bool, source: str) -> None:
+    def _record_event_at(self, physical_id: int, active: bool, source: str, elapsed_ms: float | None = None) -> None:
         if not self.recording_session:
             return
         if source not in {"click", "keypress"}:
             return
 
         led = self._led_lookup()[physical_id]
-        elapsed = time.perf_counter() - self.recording_session["started_at"]
+        if elapsed_ms is None:
+            elapsed_ms = (time.perf_counter() - self.recording_session["started_at"]) * 1000
+
         self.recording_session["events"].append(
             {
-                "timestamp_ms": round(elapsed * 1000, 3),
+                "timestamp_ms": round(elapsed_ms, 3),
                 "trigger_type": source,
                 "physical_id": physical_id,
                 "display_name_snapshot": led.get("display_name", ""),
@@ -213,6 +211,9 @@ class LedControlService:
                 "active": active,
             }
         )
+
+    def _record_event(self, physical_id: int, active: bool, source: str) -> None:
+        self._record_event_at(physical_id, active, source)
 
     def _set_light_state(self, physical_id: int, active: bool, source: str, record_event: bool) -> dict[str, Any]:
         if physical_id < 1 or physical_id > self.settings["led_count"]:
@@ -274,6 +275,37 @@ class LedControlService:
     def set_light(self, physical_id: int, active: bool, source: str = "click") -> dict[str, Any]:
         with self.lock:
             return self._set_light_state(physical_id, active=active, source=source, record_event=True)
+
+    def trigger_key(self, key: str) -> dict[str, Any]:
+        normalized_key = str(key).strip().upper()
+        if not normalized_key:
+            raise ValueError("Key is required.")
+
+        with self.lock:
+            physical_ids = [
+                led["physical_id"]
+                for led in self.layout["leds"]
+                if led.get("key") == normalized_key
+            ]
+            if not physical_ids:
+                raise ValueError(f"No lights are assigned to key '{normalized_key}'.")
+
+            target_active = not all(physical_id in self.active_ids for physical_id in physical_ids)
+            elapsed_ms = None
+            if self.recording_session:
+                elapsed_ms = (time.perf_counter() - self.recording_session["started_at"]) * 1000
+
+            for physical_id in physical_ids:
+                self._set_light_state(physical_id, active=target_active, source="keypress", record_event=False)
+                if self.recording_session:
+                    self._record_event_at(physical_id, target_active, "keypress", elapsed_ms=elapsed_ms)
+
+            return {
+                "key": normalized_key,
+                "physical_ids": physical_ids,
+                "active": target_active,
+                "active_leds": sorted(self.active_ids),
+            }
 
     def all_off(self, source: str = "system") -> dict[str, Any]:
         with self.lock:

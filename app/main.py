@@ -81,6 +81,12 @@ def all_off():
     return jsonify(service.all_off(source=source))
 
 
+@app.post("/api/keys/trigger")
+def trigger_key():
+    payload = request.get_json(force=True, silent=False) or {}
+    return jsonify(service.trigger_key(payload.get("key", "")))
+
+
 @app.post("/api/recordings/start")
 def start_recording():
     return jsonify(service.start_recording())

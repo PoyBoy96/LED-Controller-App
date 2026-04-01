@@ -135,6 +135,16 @@ function setActiveLedIds(nextIds) {
   state.server.active_leds = [...nextIds].sort((left, right) => left - right);
 }
 
+function getMappedLedIdsForKey(key) {
+  const normalizedKey = String(key).trim().toUpperCase();
+  if (!normalizedKey || !state.server?.layout?.leds) {
+    return [];
+  }
+  return state.server.layout.leds
+    .filter((led) => led.key === normalizedKey)
+    .map((led) => led.physical_id);
+}
+
 function formatLedLabel(led) {
   return led.display_name ? `${led.physical_id}: ${led.display_name}` : `${led.physical_id}`;
 }
@@ -606,6 +616,41 @@ async function triggerLed(physicalId, source) {
   }
 }
 
+async function triggerKeyAssignment(key) {
+  const normalizedKey = String(key).trim().toUpperCase();
+  const mappedIds = getMappedLedIdsForKey(normalizedKey);
+  if (!mappedIds.length) {
+    return;
+  }
+
+  const previousActiveIds = [...getActiveLedIds()];
+  const nextActiveIds = new Set(previousActiveIds);
+  const targetActive = !mappedIds.every((physicalId) => nextActiveIds.has(physicalId));
+
+  mappedIds.forEach((physicalId) => {
+    if (targetActive) {
+      nextActiveIds.add(physicalId);
+    } else {
+      nextActiveIds.delete(physicalId);
+    }
+  });
+
+  setActiveLedIds(nextActiveIds);
+  render();
+
+  try {
+    await api("/api/keys/trigger", {
+      method: "POST",
+      body: JSON.stringify({ key: normalizedKey }),
+    });
+    await loadState({ silent: true, force: true });
+  } catch (error) {
+    setActiveLedIds(previousActiveIds);
+    render();
+    showError(error);
+  }
+}
+
 async function saveLayout({ exitEditMode = false } = {}) {
   if (!state.localLayout) {
     return;
@@ -806,13 +851,13 @@ function handleGlobalKeydown(event) {
   }
 
   const key = event.key.toUpperCase();
-  const match = state.server.layout.leds.find((led) => led.key === key);
-  if (!match) {
+  const mappedIds = getMappedLedIdsForKey(key);
+  if (!mappedIds.length) {
     return;
   }
 
   event.preventDefault();
-  void triggerLed(match.physical_id, "keypress");
+  void triggerKeyAssignment(key);
 }
 
 function handleWindowPointerDown(event) {

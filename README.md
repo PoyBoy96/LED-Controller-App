@@ -84,7 +84,7 @@ In live mode you can:
 
 - Click a light in the side panel to toggle it
 - Click a placed light on the scene to toggle it
-- Press a mapped keyboard key to toggle its assigned light
+- Press a mapped keyboard key to toggle its assigned light or lights
 - Use `All Off` to clear every active light
 
 ### Edit mode
@@ -94,7 +94,8 @@ In edit mode you can:
 - Drag unplaced lights from the left panel onto the scene
 - Drag placed lights to reposition them
 - Rename lights without changing their physical LED number
-- Assign a single keyboard key to a light
+- Assign a keyboard key to a light
+- Reuse the same key across multiple lights if you want one key to control a group
 - Remove a placed light from the scene
 - Upload or replace the scene image
 
