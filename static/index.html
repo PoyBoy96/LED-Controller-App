@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LED Controller App</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="page-shell">
+      <header class="hero-bar">
+        <div>
+          <p class="eyebrow">WS2811 Stage Map</p>
+          <h1>LED Controller App</h1>
+        </div>
+        <div class="driver-card">
+          <span class="status-dot" id="driverDot"></span>
+          <div>
+            <strong id="driverMode">Driver</strong>
+            <p id="driverDetail">Loading hardware status...</p>
+          </div>
+        </div>
+      </header>
+
+      <section class="control-grid">
+        <div class="control-card">
+          <div class="section-label">Modes</div>
+          <div class="button-row">
+            <button id="editToggleBtn" class="accent">Edit</button>
+            <button id="saveLayoutBtn">Save Layout</button>
+            <button id="allOffBtn">All Off</button>
+          </div>
+          <div class="meta-row" id="modeSummary">Live mode active</div>
+        </div>
+
+        <div class="control-card">
+          <div class="section-label">Recording</div>
+          <div class="button-row">
+            <button id="recordBtn" class="danger">Record</button>
+            <button id="stopRecordBtn">Stop</button>
+          </div>
+          <div class="field-row">
+            <input id="recordingNameInput" type="text" placeholder="Recording name" />
+            <label class="checkbox-row">
+              <input id="saveLoopPreference" type="checkbox" />
+              Save loop pref
+            </label>
+            <button id="saveRecordingBtn">Save Recording</button>
+          </div>
+          <div class="meta-row" id="recordingSummary">No active recording</div>
+        </div>
+
+        <div class="control-card">
+          <div class="section-label">Playback</div>
+          <div class="field-row">
+            <div id="recordingPicker" class="dropdown">
+              <button id="recordingPickerBtn" class="dropdown-trigger" type="button" aria-expanded="false">
+                <span id="recordingPickerLabel">Select a recording</span>
+                <span class="dropdown-chevron" aria-hidden="true">▾</span>
+              </button>
+              <div id="recordingMenu" class="dropdown-menu"></div>
+            </div>
+            <label class="checkbox-row">
+              <input id="playbackLoopToggle" type="checkbox" />
+              Loop
+            </label>
+          </div>
+          <div class="button-row">
+            <button id="playBtn" class="accent">Play</button>
+            <button id="stopPlaybackBtn">Stop</button>
+            <button id="deleteRecordingBtn">Delete</button>
+          </div>
+          <div class="meta-row" id="playbackSummary">Playback idle</div>
+        </div>
+
+        <div class="control-card">
+          <div class="section-label">Scene</div>
+          <div class="field-row">
+            <input id="imageUploadInput" type="file" accept="image/*" />
+            <button id="uploadImageBtn">Upload Image</button>
+          </div>
+          <div class="meta-row" id="layoutMeta">Waiting for layout...</div>
+        </div>
+      </section>
+
+      <main class="workspace-grid">
+        <aside class="sidebar">
+          <div class="sidebar-header">
+            <h2>Lights</h2>
+            <p id="sidebarSummary">50 physical LEDs</p>
+          </div>
+          <div id="ledList" class="led-list"></div>
+        </aside>
+
+        <section class="scene-panel">
+          <div class="scene-header">
+            <div>
+              <h2>Scene Canvas</h2>
+              <p>Drag lights here in edit mode. Click lights here in live mode.</p>
+            </div>
+            <div class="scene-key">
+              <span class="key-chip">Placed</span>
+              <span class="key-chip active-chip">Active</span>
+            </div>
+          </div>
+
+          <div id="sceneStage" class="scene-stage">
+            <div id="scenePlaceholder" class="scene-placeholder">
+              Upload a reference image, then drag LEDs into position.
+            </div>
+            <img id="sceneImage" class="scene-image" alt="Scene background" />
+            <div id="sceneOverlay" class="scene-overlay"></div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>
