@@ -24,21 +24,6 @@ service = LedControlService(storage)
 logger.info("flask app booted static_dir=%s", STATIC_DIR)
 
 
-@app.before_request
-def log_request_start():
-    if request.path in {"/api/health", "/api/state"}:
-        return
-    logger.info("request start method=%s path=%s remote=%s", request.method, request.path, request.remote_addr)
-
-
-@app.after_request
-def log_request_end(response):
-    if request.path in {"/api/health", "/api/state"}:
-        return response
-    logger.info("request end method=%s path=%s status=%s", request.method, request.path, response.status_code)
-    return response
-
-
 @app.errorhandler(ValueError)
 def handle_value_error(error):
     logger.warning("value error path=%s error=%s", request.path, error)

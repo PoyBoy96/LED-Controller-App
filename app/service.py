@@ -245,7 +245,7 @@ class LedControlService:
             "source": source,
             "active_leds": sorted(self.active_ids),
         }
-        logger.info(
+        logger.debug(
             "light state physical_id=%s active=%s source=%s record_event=%s active_leds=%s",
             physical_id,
             active,
