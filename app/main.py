@@ -4,8 +4,13 @@ from pathlib import Path
 
 from flask import Flask, jsonify, request, send_from_directory
 
+from .logging_utils import configure_logging, get_logger
 from .service import LedControlService
 from .storage import JsonStorage
+
+
+configure_logging()
+logger = get_logger("app")
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -16,10 +21,27 @@ app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024
 
 storage = JsonStorage(BASE_DIR)
 service = LedControlService(storage)
+logger.info("flask app booted static_dir=%s", STATIC_DIR)
+
+
+@app.before_request
+def log_request_start():
+    if request.path in {"/api/health", "/api/state"}:
+        return
+    logger.info("request start method=%s path=%s remote=%s", request.method, request.path, request.remote_addr)
+
+
+@app.after_request
+def log_request_end(response):
+    if request.path in {"/api/health", "/api/state"}:
+        return response
+    logger.info("request end method=%s path=%s status=%s", request.method, request.path, response.status_code)
+    return response
 
 
 @app.errorhandler(ValueError)
 def handle_value_error(error):
+    logger.warning("value error path=%s error=%s", request.path, error)
     return jsonify({"error": str(error)}), 400
 
 
@@ -141,4 +163,5 @@ def stop_playback():
 
 
 if __name__ == "__main__":
+    logger.info("starting development server host=0.0.0.0 port=8000 debug=true")
     app.run(host="0.0.0.0", port=8000, debug=True)

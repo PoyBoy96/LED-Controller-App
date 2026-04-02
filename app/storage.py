@@ -9,6 +9,10 @@ from werkzeug.datastructures import FileStorage
 from werkzeug.utils import secure_filename
 
 from .defaults import make_default_layout, make_default_settings
+from .logging_utils import get_logger
+
+
+logger = get_logger("storage")
 
 
 class JsonStorage:
@@ -25,6 +29,7 @@ class JsonStorage:
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.uploads_dir.mkdir(parents=True, exist_ok=True)
         self.recordings_dir.mkdir(parents=True, exist_ok=True)
+        logger.info("storage ensure_structure data_dir=%s uploads_dir=%s recordings_dir=%s", self.data_dir, self.uploads_dir, self.recordings_dir)
 
         if not self.settings_path.exists():
             self.save_settings(make_default_settings())
@@ -42,12 +47,22 @@ class JsonStorage:
     def _write_json(self, path: Path, payload: Any) -> None:
         with path.open("w", encoding="utf-8") as handle:
             json.dump(payload, handle, indent=2)
+        logger.info("storage write_json path=%s", path)
 
     def load_settings(self) -> dict[str, Any]:
         return self._read_json(self.settings_path, make_default_settings())
 
     def save_settings(self, settings: dict[str, Any]) -> dict[str, Any]:
         self._write_json(self.settings_path, settings)
+        logger.info(
+            "storage save_settings led_count=%s pin=%s brightness=%s driver=%s channel=%s dma=%s",
+            settings.get("led_count"),
+            settings.get("pin"),
+            settings.get("default_brightness"),
+            settings.get("driver"),
+            settings.get("channel"),
+            settings.get("dma_channel"),
+        )
         return settings
 
     def load_layout(self) -> dict[str, Any]:
@@ -56,6 +71,8 @@ class JsonStorage:
 
     def save_layout(self, layout: dict[str, Any]) -> dict[str, Any]:
         self._write_json(self.layout_path, layout)
+        placed_count = sum(1 for led in layout.get("leds", []) if led.get("placed"))
+        logger.info("storage save_layout leds=%s placed=%s background_image=%s", len(layout.get("leds", [])), placed_count, layout.get("background_image") or "")
         return layout
 
     def list_recordings(self) -> list[dict[str, Any]]:
@@ -88,6 +105,7 @@ class JsonStorage:
         record_id = recording["id"]
         path = self.recordings_dir / f"{record_id}.json"
         self._write_json(path, recording)
+        logger.info("storage save_recording id=%s name=%s event_count=%s", record_id, recording.get("name"), len(recording.get("events", [])))
         return recording
 
     def delete_recording(self, recording_id: str) -> bool:
@@ -95,6 +113,7 @@ class JsonStorage:
         if not path.exists():
             return False
         path.unlink()
+        logger.info("storage delete_recording id=%s", recording_id)
         return True
 
     def store_upload(self, upload: FileStorage) -> str:
@@ -105,4 +124,5 @@ class JsonStorage:
         filename = f"{stem}-{timestamp}{suffix}"
         destination = self.uploads_dir / filename
         upload.save(destination)
+        logger.info("storage store_upload filename=%s destination=%s", filename, destination)
         return filename

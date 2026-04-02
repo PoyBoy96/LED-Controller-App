@@ -10,7 +10,11 @@ from typing import Any
 
 from .defaults import make_default_layout
 from .led_driver import build_led_driver
+from .logging_utils import get_logger
 from .storage import JsonStorage
+
+
+logger = get_logger("service")
 
 
 def slugify(value: str) -> str:
@@ -29,6 +33,13 @@ class LedControlService:
         self.active_ids: set[int] = set()
         self.recording_session: dict[str, Any] | None = None
         self.unsaved_recording: dict[str, Any] | None = None
+        logger.info(
+            "service initialized led_count=%s pin=%s driver_mode=%s placed_leds=%s",
+            self.settings.get("led_count"),
+            self.settings.get("pin"),
+            self.driver.info.mode,
+            sum(1 for led in self.layout["leds"] if led.get("placed")),
+        )
         self.playback_state = {
             "active": False,
             "recording_id": "",
@@ -228,12 +239,21 @@ class LedControlService:
         if record_event:
             self._record_event(physical_id, active, source)
 
-        return {
+        result = {
             "physical_id": physical_id,
             "active": active,
             "source": source,
             "active_leds": sorted(self.active_ids),
         }
+        logger.info(
+            "light state physical_id=%s active=%s source=%s record_event=%s active_leds=%s",
+            physical_id,
+            active,
+            source,
+            record_event,
+            result["active_leds"],
+        )
+        return result
 
     def get_state(self) -> dict[str, Any]:
         with self.lock:
@@ -261,6 +281,7 @@ class LedControlService:
             normalized = self._validate_layout(layout)
             self.layout = normalized
             self.storage.save_layout(self.layout)
+            logger.info("save_layout completed updated_at=%s", self.layout.get("updated_at"))
             return deepcopy(self.layout)
 
     def toggle_light(self, physical_id: int, source: str = "click") -> dict[str, Any]:
@@ -300,17 +321,26 @@ class LedControlService:
                 if self.recording_session:
                     self._record_event_at(physical_id, target_active, "keypress", elapsed_ms=elapsed_ms)
 
-            return {
+            result = {
                 "key": normalized_key,
                 "physical_ids": physical_ids,
                 "active": target_active,
                 "active_leds": sorted(self.active_ids),
             }
+            logger.info(
+                "trigger_key key=%s physical_ids=%s active=%s active_leds=%s",
+                normalized_key,
+                physical_ids,
+                target_active,
+                result["active_leds"],
+            )
+            return result
 
     def all_off(self, source: str = "system") -> dict[str, Any]:
         with self.lock:
             self.active_ids.clear()
             self.driver.clear()
+            logger.info("all_off source=%s", source)
             return {"active_leds": [], "source": source}
 
     def start_recording(self) -> dict[str, Any]:
@@ -323,6 +353,7 @@ class LedControlService:
                 "started_at_iso": datetime.now(timezone.utc).isoformat(),
                 "events": [],
             }
+            logger.info("recording started at=%s", self.recording_session["started_at_iso"])
             return {
                 "active": True,
                 "started_at": self.recording_session["started_at_iso"],
@@ -345,6 +376,11 @@ class LedControlService:
                 "events": events,
             }
             self.recording_session = None
+            logger.info(
+                "recording stopped event_count=%s duration_ms=%s",
+                self.unsaved_recording["event_count"],
+                self.unsaved_recording["duration_ms"],
+            )
             return deepcopy(self.unsaved_recording)
 
     def save_recording(self, name: str, loop_preference: bool = False) -> dict[str, Any]:
@@ -369,6 +405,14 @@ class LedControlService:
             }
             self.storage.save_recording(payload)
             self.unsaved_recording = None
+            logger.info(
+                "recording saved id=%s name=%s duration_ms=%s event_count=%s loop_preference=%s",
+                payload["id"],
+                payload["name"],
+                payload["duration_ms"],
+                len(payload["events"]),
+                payload["loop_preference"],
+            )
             return {
                 "id": payload["id"],
                 "name": payload["name"],
@@ -391,6 +435,7 @@ class LedControlService:
             if not deleted:
                 raise ValueError("Recording not found.")
 
+            logger.info("recording deleted id=%s", recording_id)
             return {"deleted": True, "recording_id": recording_id}
 
     def start_playback(self, recording_id: str, loop: bool = False) -> dict[str, Any]:
@@ -418,9 +463,17 @@ class LedControlService:
                 daemon=True,
             )
             self.playback_thread.start()
+            logger.info(
+                "playback started recording_id=%s recording_name=%s loop=%s event_count=%s",
+                recording["id"],
+                recording["name"],
+                bool(loop),
+                len(recording.get("events", [])),
+            )
             return deepcopy(self.playback_state)
 
     def _run_playback(self, recording: dict[str, Any], loop: bool, stop_event: threading.Event) -> None:
+        logger.info("playback thread running recording_id=%s loop=%s", recording.get("id"), loop)
         try:
             while not stop_event.is_set():
                 self.driver.clear()
@@ -448,6 +501,7 @@ class LedControlService:
                         )
 
                 if not loop:
+                    logger.info("playback finished recording_id=%s loop=%s", recording.get("id"), loop)
                     return
         finally:
             with self.lock:
@@ -481,4 +535,5 @@ class LedControlService:
 
         with self.lock:
             self.playback_thread = None
+            logger.info("playback stopped clear_lights=%s", clear_lights)
             return deepcopy(self.playback_state)
