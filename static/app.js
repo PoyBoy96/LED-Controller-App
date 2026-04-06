@@ -2,6 +2,7 @@ const ui = {
   editToggleBtn: document.getElementById("editToggleBtn"),
   saveLayoutBtn: document.getElementById("saveLayoutBtn"),
   allOffBtn: document.getElementById("allOffBtn"),
+  editModeTools: document.getElementById("editModeTools"),
   recordBtn: document.getElementById("recordBtn"),
   stopRecordBtn: document.getElementById("stopRecordBtn"),
   recordingNameInput: document.getElementById("recordingNameInput"),
@@ -19,6 +20,7 @@ const ui = {
   gridLengthInput: document.getElementById("gridLengthInput"),
   gridWidthInput: document.getElementById("gridWidthInput"),
   buildGridBtn: document.getElementById("buildGridBtn"),
+  resetLayoutBtn: document.getElementById("resetLayoutBtn"),
   gridBuilderSummary: document.getElementById("gridBuilderSummary"),
   brightnessSlider: document.getElementById("brightnessSlider"),
   brightnessValue: document.getElementById("brightnessValue"),
@@ -434,6 +436,19 @@ function buildGridLayout() {
   });
 }
 
+function resetEditLayout() {
+  if (!state.editMode || !state.localLayout) {
+    return;
+  }
+
+  state.localLayout.leds.forEach((led) => {
+    led.display_name = "";
+    led.placed = false;
+    led.x = null;
+    led.y = null;
+  });
+}
+
 function closeRecordingMenu() {
   state.recordingMenuOpen = false;
   ui.recordingPickerBtn.classList.remove("open");
@@ -536,6 +551,7 @@ function render() {
   ui.layoutMeta.textContent = getSceneStatusText(layout, placedCount);
   ui.sidebarSummary.textContent = `${layout.leds.length} physical LEDs`;
   ui.editToggleBtn.textContent = state.editMode ? "Done" : "Edit";
+  ui.editModeTools.hidden = !state.editMode;
   ui.sceneStage.classList.toggle("editing", state.editMode);
 
   const recording = state.server.recording;
@@ -572,6 +588,7 @@ function render() {
   ui.gridLengthInput.disabled = !state.editMode || state.uploadInFlight;
   ui.gridWidthInput.disabled = !state.editMode || state.uploadInFlight;
   ui.buildGridBtn.disabled = !state.editMode || state.uploadInFlight;
+  ui.resetLayoutBtn.disabled = !state.editMode || state.uploadInFlight;
 
   renderLightingControls(settings);
   renderGridBuilderSummary(layout.leds.length);
@@ -1101,6 +1118,20 @@ function handleBuildGrid() {
   }
 }
 
+function handleResetLayout() {
+  if (!state.editMode || !state.localLayout) {
+    return;
+  }
+
+  const confirmed = window.confirm("Remove all placed lights and clear their names? Key bindings will stay.");
+  if (!confirmed) {
+    return;
+  }
+
+  resetEditLayout();
+  render();
+}
+
 async function startRecording() {
   try {
     await api("/api/recordings/start", { method: "POST" });
@@ -1338,6 +1369,7 @@ ui.gridWidthInput.addEventListener("input", () => {
   }
 });
 ui.buildGridBtn.addEventListener("click", handleBuildGrid);
+ui.resetLayoutBtn.addEventListener("click", handleResetLayout);
 ui.brightnessSlider.addEventListener("input", handleLightingInput);
 ui.brightnessSlider.addEventListener("change", handleLightingCommit);
 ui.sceneStage.addEventListener("dragover", handleSceneDragOver);

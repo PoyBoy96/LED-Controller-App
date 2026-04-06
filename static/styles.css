@@ -139,6 +139,12 @@ h1 {
   flex-wrap: wrap;
 }
 
+.edit-mode-tools {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
 .grid-builder-row {
   align-items: end;
 }
