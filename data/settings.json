@@ -1,6 +1,6 @@
 {
   "led_count": 50,
-  "default_brightness": 96,
+  "default_brightness": 100,
   "default_toggle_behavior": "toggle",
   "allowed_keys": [
     "1",
