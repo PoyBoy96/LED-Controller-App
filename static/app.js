@@ -66,6 +66,28 @@ const IMAGE_UPLOAD_ERROR = "Only PNG and JPEG images are supported.";
 const IMAGE_UPLOAD_MIME_TYPES = new Set(["image/png", "image/jpeg"]);
 const IMAGE_UPLOAD_EXTENSIONS = [".png", ".jpg", ".jpeg"];
 const LIGHTING_PREVIEW_INTERVAL_MS = 45;
+const KEY_CODE_BINDINGS = {
+  Minus: "-",
+  Equal: "=",
+  BracketLeft: "[",
+  BracketRight: "]",
+  Backslash: "\\",
+  Semicolon: ";",
+  Quote: "'",
+  Comma: ",",
+  Period: ".",
+  Slash: "/",
+  ArrowUp: "ARROWUP",
+  ArrowLeft: "ARROWLEFT",
+  ArrowDown: "ARROWDOWN",
+  ArrowRight: "ARROWRIGHT",
+};
+const KEY_LABELS = {
+  ARROWUP: "↑",
+  ARROWLEFT: "←",
+  ARROWDOWN: "↓",
+  ARROWRIGHT: "→",
+};
 
 async function api(path, options = {}) {
   const config = {
@@ -210,7 +232,7 @@ function formatLedLabel(led) {
 }
 
 function formatLedMeta(led) {
-  return led.key ? `Physical ${led.physical_id} • Key ${led.key}` : `Physical ${led.physical_id}`;
+  return led.key ? `Physical ${led.physical_id} • Key ${formatKeyBindingLabel(led.key)}` : `Physical ${led.physical_id}`;
 }
 
 function formatDuration(durationMs) {
@@ -249,6 +271,15 @@ function getSceneStatusText(layout, placedCount) {
 
 function showError(error) {
   window.alert(error.message || String(error));
+}
+
+function normalizeKeyBinding(key) {
+  return String(key || "").trim().toUpperCase();
+}
+
+function formatKeyBindingLabel(key) {
+  const normalized = normalizeKeyBinding(key);
+  return KEY_LABELS[normalized] || normalized;
 }
 
 function getFileExtension(filename) {
@@ -325,8 +356,10 @@ function getKeyboardKeyFromEvent(event) {
   if (/^Digit[0-9]$/.test(code)) {
     return code.slice(5);
   }
-  const key = String(event.key || "").toUpperCase();
-  return key.length === 1 ? key : "";
+  if (KEY_CODE_BINDINGS[code]) {
+    return KEY_CODE_BINDINGS[code];
+  }
+  return "";
 }
 
 function revokeScenePreviewUrl() {
@@ -431,11 +464,13 @@ function resetEditLayout() {
     return;
   }
 
+  const allowedKeys = Array.isArray(state.server?.settings?.allowed_keys) ? state.server.settings.allowed_keys : [];
   state.localLayout.leds.forEach((led) => {
     led.display_name = "";
     led.placed = false;
     led.x = null;
     led.y = null;
+    led.key = allowedKeys[led.physical_id - 1] || "";
   });
 }
 
@@ -706,12 +741,26 @@ function renderSidebar(layout, activeIds) {
 
       const keyInput = document.createElement("input");
       keyInput.type = "text";
-      keyInput.placeholder = "Key";
-      keyInput.maxLength = 1;
-      keyInput.value = led.key || "";
-      keyInput.addEventListener("input", (event) => {
-        const key = event.target.value.toUpperCase().trim();
-        event.target.value = key;
+      keyInput.placeholder = "Press key";
+      keyInput.readOnly = true;
+      keyInput.value = formatKeyBindingLabel(led.key || "");
+      keyInput.addEventListener("keydown", (event) => {
+        let key = "";
+        if (event.key === "Backspace" || event.key === "Delete") {
+          event.preventDefault();
+        } else {
+          key = getKeyboardKeyFromEvent(event);
+          if (!key) {
+            return;
+          }
+          event.preventDefault();
+          if (!state.server?.settings?.allowed_keys?.includes(key)) {
+            showError(new Error(`Key ${formatKeyBindingLabel(key)} is not in the allowed key list.`));
+            return;
+          }
+        }
+
+        keyInput.value = formatKeyBindingLabel(key);
         updateLocalLed(led.physical_id, { key });
         metaNode.textContent = formatLedMeta({ ...led, key });
       });
@@ -1113,7 +1162,9 @@ function handleResetLayout() {
     return;
   }
 
-  const confirmed = window.confirm("Remove all placed lights and clear their names? Key bindings will stay.");
+  const confirmed = window.confirm(
+    "Remove all placed lights, clear their names, and restore the default keyboard order? You can still edit keys after."
+  );
   if (!confirmed) {
     return;
   }

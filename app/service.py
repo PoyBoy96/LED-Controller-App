@@ -147,8 +147,7 @@ class LedControlService:
             clamp_int(active_color[2], 0, 255, "active_color.blue"),
         ]
 
-        allowed_keys = [str(key).strip().upper() for key in normalized.get("allowed_keys", defaults["allowed_keys"])]
-        normalized["allowed_keys"] = [key for key in allowed_keys if key] or deepcopy(defaults["allowed_keys"])
+        normalized["allowed_keys"] = deepcopy(defaults["allowed_keys"])
         normalized["driver"] = str(normalized.get("driver", defaults["driver"])).strip().lower() or defaults["driver"]
         normalized["default_toggle_behavior"] = str(
             normalized.get("default_toggle_behavior", defaults["default_toggle_behavior"])
