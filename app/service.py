@@ -8,7 +8,7 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Any
 
-from .defaults import make_default_layout
+from .defaults import make_default_layout, make_default_settings
 from .led_driver import build_led_driver
 from .logging_utils import get_logger
 from .storage import JsonStorage
@@ -22,11 +22,22 @@ def slugify(value: str) -> str:
     return normalized or "recording"
 
 
+def clamp_int(value: Any, minimum: int, maximum: int, field_name: str) -> int:
+    try:
+        normalized = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_name} must be an integer.") from exc
+    if normalized < minimum or normalized > maximum:
+        raise ValueError(f"{field_name} must be between {minimum} and {maximum}.")
+    return normalized
+
+
 class LedControlService:
     def __init__(self, storage: JsonStorage):
         self.storage = storage
         self.lock = threading.RLock()
-        self.settings = self.storage.load_settings()
+        self.settings = self._normalize_settings(self.storage.load_settings())
+        self.storage.save_settings(self.settings)
         self.layout = self._normalize_layout(self.storage.load_layout())
         self._ensure_builtin_presets()
         self.driver = build_led_driver(self.settings)
@@ -78,6 +89,57 @@ class LedControlService:
             normalized_leds.append(led)
         normalized["leds"] = normalized_leds
         return normalized
+
+    def _normalize_settings(self, payload: dict[str, Any] | None) -> dict[str, Any]:
+        defaults = make_default_settings()
+        payload = payload or {}
+        normalized = deepcopy(defaults)
+        normalized.update(payload)
+
+        normalized["led_count"] = clamp_int(normalized.get("led_count", defaults["led_count"]), 1, 4096, "led_count")
+        normalized["default_brightness"] = clamp_int(
+            normalized.get("default_brightness", defaults["default_brightness"]),
+            0,
+            255,
+            "default_brightness",
+        )
+        normalized["pin"] = clamp_int(normalized.get("pin", defaults["pin"]), 0, 99, "pin")
+        normalized["frequency_hz"] = clamp_int(
+            normalized.get("frequency_hz", defaults["frequency_hz"]),
+            1,
+            10_000_000,
+            "frequency_hz",
+        )
+        normalized["dma_channel"] = clamp_int(
+            normalized.get("dma_channel", defaults["dma_channel"]),
+            0,
+            255,
+            "dma_channel",
+        )
+        normalized["channel"] = clamp_int(normalized.get("channel", defaults["channel"]), 0, 1, "channel")
+        normalized["invert_signal"] = bool(normalized.get("invert_signal", defaults["invert_signal"]))
+        normalized["all_white_mode"] = bool(normalized.get("all_white_mode", defaults["all_white_mode"]))
+
+        active_color = normalized.get("active_color", defaults["active_color"])
+        if not isinstance(active_color, (list, tuple)) or len(active_color) != 3:
+            raise ValueError("active_color must contain red, green, and blue values.")
+        normalized["active_color"] = [
+            clamp_int(active_color[0], 0, 255, "active_color.red"),
+            clamp_int(active_color[1], 0, 255, "active_color.green"),
+            clamp_int(active_color[2], 0, 255, "active_color.blue"),
+        ]
+
+        allowed_keys = [str(key).strip().upper() for key in normalized.get("allowed_keys", defaults["allowed_keys"])]
+        normalized["allowed_keys"] = [key for key in allowed_keys if key] or deepcopy(defaults["allowed_keys"])
+        normalized["driver"] = str(normalized.get("driver", defaults["driver"])).strip().lower() or defaults["driver"]
+        normalized["default_toggle_behavior"] = str(
+            normalized.get("default_toggle_behavior", defaults["default_toggle_behavior"])
+        ).strip() or defaults["default_toggle_behavior"]
+        return normalized
+
+    def _refresh_driver_settings(self) -> None:
+        self.driver.update_settings(self.settings)
+        self.driver.sync_from_ids(self.active_ids)
 
     def _validate_layout(self, layout: dict[str, Any]) -> dict[str, Any]:
         normalized = self._normalize_layout(layout)
@@ -275,6 +337,21 @@ class LedControlService:
                     "detail": self.driver.info.detail,
                 },
             }
+
+    def save_settings(self, settings_update: dict[str, Any]) -> dict[str, Any]:
+        with self.lock:
+            normalized = self._normalize_settings({**self.settings, **(settings_update or {})})
+            self.settings = normalized
+            self.storage.save_settings(self.settings)
+            self._refresh_driver_settings()
+            logger.info(
+                "save_settings brightness=%s active_color=%s all_white_mode=%s active_leds=%s",
+                self.settings["default_brightness"],
+                self.settings["active_color"],
+                self.settings["all_white_mode"],
+                sorted(self.active_ids),
+            )
+            return deepcopy(self.settings)
 
     def save_layout(self, layout: dict[str, Any]) -> dict[str, Any]:
         with self.lock:

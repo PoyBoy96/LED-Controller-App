@@ -108,7 +108,7 @@ h1 {
 .control-grid {
   margin-top: 20px;
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
   gap: 16px;
 }
 
@@ -156,6 +156,11 @@ input[type="file"] {
   background: rgba(255, 255, 255, 0.06);
 }
 
+input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
 button {
   cursor: pointer;
   transition: transform 120ms ease, background 120ms ease, border-color 120ms ease;
@@ -189,6 +194,31 @@ button.danger {
   align-items: center;
   gap: 8px;
   color: var(--muted);
+}
+
+.checkbox-row-strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.lighting-stack,
+.rgb-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.range-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  color: var(--muted);
+  font-size: 0.92rem;
+}
+
+.range-field strong {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
 }
 
 .dropdown {

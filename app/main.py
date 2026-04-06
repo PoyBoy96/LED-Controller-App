@@ -50,6 +50,12 @@ def state():
     return jsonify(service.get_state())
 
 
+@app.post("/api/settings")
+def save_settings():
+    payload = request.get_json(force=True, silent=False) or {}
+    return jsonify({"settings": service.save_settings(payload)})
+
+
 @app.post("/api/layout")
 def save_layout():
     payload = request.get_json(force=True, silent=False) or {}

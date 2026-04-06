@@ -15,10 +15,20 @@ class DriverInfo:
     detail: str
 
 
+def resolve_active_color(settings: dict) -> list[int]:
+    if settings.get("all_white_mode", True):
+        return [255, 255, 255]
+    return [int(channel) for channel in settings.get("active_color", [255, 255, 255])]
+
+
 class MockLedDriver:
-    def __init__(self, led_count: int):
+    def __init__(self, led_count: int, settings: dict | None = None):
         self.led_count = led_count
         self.active_pixels: set[int] = set()
+        self.default_brightness = 96
+        self.active_color = [255, 255, 255]
+        if settings:
+            self.update_settings(settings)
         self.info = DriverInfo(mode="mock", detail="Using in-memory LED state")
         logger.info("driver initialized mode=mock led_count=%s", led_count)
 
@@ -37,6 +47,15 @@ class MockLedDriver:
         self.active_pixels = set(active_ids)
         logger.info("mock sync_from_ids active_ids=%s", sorted(self.active_pixels))
 
+    def update_settings(self, settings: dict) -> None:
+        self.default_brightness = int(settings.get("default_brightness", 96))
+        self.active_color = resolve_active_color(settings)
+        logger.info(
+            "mock update_settings brightness=%s active_color=%s",
+            self.default_brightness,
+            self.active_color,
+        )
+
 
 class RpiWs281xDriver:
     def __init__(self, settings: dict):
@@ -45,7 +64,7 @@ class RpiWs281xDriver:
         self._color_builder = Color
         self.led_count = settings["led_count"]
         self.active_pixels: set[int] = set()
-        self.active_color = settings.get("active_color", [255, 170, 48])
+        self.active_color = resolve_active_color(settings)
         self.pin = settings.get("pin", 18)
         self.frequency_hz = settings.get("frequency_hz", 800000)
         self.dma_channel = settings.get("dma_channel", 10)
@@ -112,12 +131,23 @@ class RpiWs281xDriver:
         self.active_pixels = target_ids
         logger.info("real sync_from_ids pin=%s active_ids=%s", self.pin, sorted(self.active_pixels))
 
+    def update_settings(self, settings: dict) -> None:
+        self.default_brightness = int(settings.get("default_brightness", 96))
+        self.active_color = resolve_active_color(settings)
+        self.strip.setBrightness(self.default_brightness)
+        logger.info(
+            "real update_settings pin=%s brightness=%s active_color=%s",
+            self.pin,
+            self.default_brightness,
+            self.active_color,
+        )
+
 
 def build_led_driver(settings: dict):
     requested_mode = settings.get("driver", "auto").lower()
     logger.info("build_led_driver requested_mode=%s settings_pin=%s settings_channel=%s", requested_mode, settings.get("pin"), settings.get("channel"))
     if requested_mode == "mock":
-        return MockLedDriver(settings["led_count"])
+        return MockLedDriver(settings["led_count"], settings=settings)
 
     try:
         return RpiWs281xDriver(settings)
@@ -125,4 +155,4 @@ def build_led_driver(settings: dict):
         logger.exception("real driver init failed requested_mode=%s error=%s", requested_mode, exc)
         if requested_mode == "real":
             raise RuntimeError(f"Unable to initialize real LED driver: {exc}") from exc
-        return MockLedDriver(settings["led_count"])
+        return MockLedDriver(settings["led_count"], settings=settings)

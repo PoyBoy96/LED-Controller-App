@@ -77,6 +77,6 @@ def make_default_settings() -> dict[str, Any]:
         "dma_channel": 10,
         "invert_signal": False,
         "channel": 0,
-        "active_color": [255, 170, 48],
+        "active_color": [255, 255, 255],
+        "all_white_mode": True,
     }
-

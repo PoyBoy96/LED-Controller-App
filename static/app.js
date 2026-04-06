@@ -16,7 +16,16 @@ const ui = {
   stopPlaybackBtn: document.getElementById("stopPlaybackBtn"),
   deleteRecordingBtn: document.getElementById("deleteRecordingBtn"),
   imageUploadInput: document.getElementById("imageUploadInput"),
-  uploadImageBtn: document.getElementById("uploadImageBtn"),
+  brightnessSlider: document.getElementById("brightnessSlider"),
+  brightnessValue: document.getElementById("brightnessValue"),
+  allWhiteToggle: document.getElementById("allWhiteToggle"),
+  redSlider: document.getElementById("redSlider"),
+  redValue: document.getElementById("redValue"),
+  greenSlider: document.getElementById("greenSlider"),
+  greenValue: document.getElementById("greenValue"),
+  blueSlider: document.getElementById("blueSlider"),
+  blueValue: document.getElementById("blueValue"),
+  lightingSummary: document.getElementById("lightingSummary"),
   ledList: document.getElementById("ledList"),
   sceneStage: document.getElementById("sceneStage"),
   sceneOverlay: document.getElementById("sceneOverlay"),
@@ -35,6 +44,7 @@ const ui = {
 const state = {
   server: null,
   localLayout: null,
+  localSettings: null,
   editMode: false,
   draggingMarkerId: null,
   pollTimer: null,
@@ -42,6 +52,9 @@ const state = {
   sceneImageSource: "",
   sceneImageLoadState: "idle",
   sceneImageVersion: 0,
+  sceneImagePreviewUrl: "",
+  lightingSaveTimer: null,
+  uploadInFlight: false,
   selectedRecordingId: "",
   recordingMenuOpen: false,
 };
@@ -68,11 +81,22 @@ function cloneLayout(layout) {
   return JSON.parse(JSON.stringify(layout));
 }
 
+function cloneSettings(settings) {
+  return JSON.parse(JSON.stringify(settings));
+}
+
 function getViewLayout() {
   if (state.editMode && state.localLayout) {
     return state.localLayout;
   }
   return state.server?.layout || null;
+}
+
+function getViewSettings() {
+  if (state.editMode && state.localSettings) {
+    return state.localSettings;
+  }
+  return state.server?.settings || null;
 }
 
 function getRecordings() {
@@ -169,6 +193,12 @@ function buildSceneImageSrc(path) {
 }
 
 function getSceneStatusText(layout, placedCount) {
+  if (state.uploadInFlight) {
+    return `${placedCount} of ${layout.leds.length} LEDs placed • uploading image`;
+  }
+  if (state.sceneImagePreviewUrl) {
+    return `${placedCount} of ${layout.leds.length} LEDs placed • previewing selected image`;
+  }
   if (!layout.background_image) {
     return `${placedCount} of ${layout.leds.length} LEDs placed • no scene image`;
   }
@@ -185,6 +215,14 @@ function showError(error) {
   window.alert(error.message || String(error));
 }
 
+function revokeScenePreviewUrl() {
+  if (!state.sceneImagePreviewUrl) {
+    return;
+  }
+  URL.revokeObjectURL(state.sceneImagePreviewUrl);
+  state.sceneImagePreviewUrl = "";
+}
+
 function updateLocalLed(physicalId, changes) {
   if (!state.localLayout) {
     return;
@@ -194,6 +232,13 @@ function updateLocalLed(physicalId, changes) {
     return;
   }
   Object.assign(target, changes);
+}
+
+function updateLocalSettings(changes) {
+  if (!state.localSettings) {
+    return;
+  }
+  Object.assign(state.localSettings, changes);
 }
 
 function closeRecordingMenu() {
@@ -222,8 +267,11 @@ function setEditMode(nextValue) {
   state.editMode = nextValue;
   if (nextValue) {
     state.localLayout = cloneLayout(state.server.layout);
+    state.localSettings = cloneSettings(state.server.settings);
   } else {
     state.localLayout = null;
+    state.localSettings = null;
+    revokeScenePreviewUrl();
   }
   closeRecordingMenu();
   schedulePoll();
@@ -265,6 +313,7 @@ async function loadState({ silent = false, force = false } = {}) {
     state.server = await api("/api/state");
     if (!state.editMode) {
       state.localLayout = null;
+      state.localSettings = null;
     }
     syncSelectedRecording();
     render();
@@ -286,6 +335,7 @@ function render() {
   syncSelectedRecording();
 
   const layout = getViewLayout();
+  const settings = getViewSettings();
   const activeIds = getActiveIdSet();
   const placedCount = layout.leds.filter((led) => led.placed).length;
   const selectedRecording = getSelectedRecording();
@@ -326,9 +376,11 @@ function render() {
   ui.deleteRecordingBtn.disabled = playback.active || !selectedRecording || selectedRecording.is_preset;
   ui.deleteRecordingBtn.title = selectedRecording?.is_preset ? "Built-in presets cannot be deleted." : "";
   ui.saveRecordingBtn.disabled = !recording.unsaved;
-  ui.saveLayoutBtn.disabled = !state.editMode;
-  ui.uploadImageBtn.disabled = !state.editMode;
+  ui.editToggleBtn.disabled = state.uploadInFlight;
+  ui.saveLayoutBtn.disabled = !state.editMode || state.uploadInFlight;
+  ui.imageUploadInput.disabled = !state.editMode || state.uploadInFlight;
 
+  renderLightingControls(settings);
   renderSidebar(layout, activeIds);
   renderScene(layout, activeIds);
 }
@@ -388,6 +440,45 @@ function renderRecordingPicker(selectedRecording) {
 
     ui.recordingMenu.appendChild(option);
   });
+}
+
+function renderLightingControls(settings) {
+  if (!settings) {
+    return;
+  }
+
+  const [red, green, blue] = settings.active_color || [255, 255, 255];
+  const allWhiteMode = Boolean(settings.all_white_mode);
+  const lightingLocked = !state.editMode;
+
+  ui.brightnessSlider.value = String(settings.default_brightness ?? 96);
+  ui.brightnessValue.textContent = ui.brightnessSlider.value;
+
+  ui.allWhiteToggle.checked = allWhiteMode;
+
+  ui.redSlider.value = String(red);
+  ui.redValue.textContent = ui.redSlider.value;
+
+  ui.greenSlider.value = String(green);
+  ui.greenValue.textContent = ui.greenSlider.value;
+
+  ui.blueSlider.value = String(blue);
+  ui.blueValue.textContent = ui.blueSlider.value;
+
+  ui.brightnessSlider.disabled = lightingLocked;
+  ui.allWhiteToggle.disabled = lightingLocked;
+  ui.redSlider.disabled = lightingLocked || allWhiteMode;
+  ui.greenSlider.disabled = lightingLocked || allWhiteMode;
+  ui.blueSlider.disabled = lightingLocked || allWhiteMode;
+
+  if (lightingLocked) {
+    ui.lightingSummary.textContent = "Lighting settings are editable in edit mode.";
+    return;
+  }
+
+  ui.lightingSummary.textContent = allWhiteMode
+    ? "Active LEDs follow the brightness slider and force pure white."
+    : "Active LEDs update live from brightness and RGB values.";
 }
 
 function renderSidebar(layout, activeIds) {
@@ -493,14 +584,14 @@ function renderSidebar(layout, activeIds) {
 }
 
 function renderScene(layout, activeIds) {
-  const hasImage = Boolean(layout.background_image);
-  const desiredImage = layout.background_image || "";
+  const desiredImage = state.sceneImagePreviewUrl || layout.background_image || "";
+  const hasImage = Boolean(desiredImage);
 
   if (desiredImage !== state.sceneImageSource) {
     state.sceneImageSource = desiredImage;
     if (desiredImage) {
       state.sceneImageLoadState = "loading";
-      ui.sceneImage.src = buildSceneImageSrc(desiredImage);
+      ui.sceneImage.src = state.sceneImagePreviewUrl ? desiredImage : buildSceneImageSrc(desiredImage);
     } else {
       state.sceneImageLoadState = "idle";
       ui.sceneImage.removeAttribute("src");
@@ -652,11 +743,17 @@ async function triggerKeyAssignment(key) {
 }
 
 async function saveLayout({ exitEditMode = false } = {}) {
-  if (!state.localLayout) {
+  if (!state.localLayout || state.uploadInFlight) {
     return;
   }
 
   try {
+    if (state.localSettings) {
+      window.clearTimeout(state.lightingSaveTimer);
+      state.lightingSaveTimer = null;
+      await saveLightingSettings({ silent: true });
+    }
+
     const payload = cloneLayout(state.localLayout);
     const response = await api("/api/layout", {
       method: "POST",
@@ -675,16 +772,70 @@ async function saveLayout({ exitEditMode = false } = {}) {
   }
 }
 
-async function uploadImage() {
-  if (!state.editMode || !state.localLayout) {
+async function saveLightingSettings({ silent = false } = {}) {
+  if (!state.localSettings) {
     return;
   }
 
-  const file = ui.imageUploadInput.files[0];
-  if (!file) {
-    window.alert("Choose an image first.");
+  try {
+    const payload = {
+      default_brightness: Number(state.localSettings.default_brightness),
+      active_color: [...state.localSettings.active_color],
+      all_white_mode: Boolean(state.localSettings.all_white_mode),
+    };
+    const response = await api("/api/settings", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+    state.server.settings = response.settings;
+    state.localSettings = cloneSettings(response.settings);
+    render();
+  } catch (error) {
+    if (!silent) {
+      showError(error);
+    }
+    if (state.server?.settings) {
+      state.localSettings = cloneSettings(state.server.settings);
+      render();
+    }
+    if (silent) {
+      throw error;
+    }
+  }
+}
+
+function queueSaveLightingSettings() {
+  window.clearTimeout(state.lightingSaveTimer);
+  state.lightingSaveTimer = window.setTimeout(() => {
+    void saveLightingSettings();
+  }, 120);
+}
+
+function handleLightingInput() {
+  if (!state.editMode || !state.localSettings) {
     return;
   }
+
+  updateLocalSettings({
+    default_brightness: Number(ui.brightnessSlider.value),
+    all_white_mode: ui.allWhiteToggle.checked,
+    active_color: [
+      Number(ui.redSlider.value),
+      Number(ui.greenSlider.value),
+      Number(ui.blueSlider.value),
+    ],
+  });
+  render();
+  queueSaveLightingSettings();
+}
+
+async function uploadImage(file) {
+  if (!state.editMode || !state.localLayout || !file) {
+    return;
+  }
+
+  state.uploadInFlight = true;
+  render();
 
   try {
     const formData = new FormData();
@@ -699,7 +850,24 @@ async function uploadImage() {
     render();
   } catch (error) {
     showError(error);
+  } finally {
+    state.uploadInFlight = false;
+    ui.imageUploadInput.value = "";
+    render();
   }
+}
+
+function handleImageSelection(event) {
+  const file = event.target.files[0];
+  if (!state.editMode || !state.localLayout || !file) {
+    return;
+  }
+
+  revokeScenePreviewUrl();
+  state.sceneImagePreviewUrl = URL.createObjectURL(file);
+  state.sceneImageSource = "";
+  render();
+  void uploadImage(file);
 }
 
 async function startRecording() {
@@ -898,15 +1066,18 @@ ui.stopPlaybackBtn.addEventListener("click", () => {
 ui.deleteRecordingBtn.addEventListener("click", () => {
   void deleteRecording();
 });
-ui.uploadImageBtn.addEventListener("click", () => {
-  void uploadImage();
-});
 ui.allOffBtn.addEventListener("click", () => {
   void allOff();
 });
 ui.recordingPickerBtn.addEventListener("click", () => {
   toggleRecordingMenu();
 });
+ui.imageUploadInput.addEventListener("change", handleImageSelection);
+ui.brightnessSlider.addEventListener("input", handleLightingInput);
+ui.allWhiteToggle.addEventListener("change", handleLightingInput);
+ui.redSlider.addEventListener("input", handleLightingInput);
+ui.greenSlider.addEventListener("input", handleLightingInput);
+ui.blueSlider.addEventListener("input", handleLightingInput);
 ui.sceneStage.addEventListener("dragover", handleSceneDragOver);
 ui.sceneStage.addEventListener("drop", handleSceneDrop);
 ui.sceneOverlay.addEventListener("dragover", handleSceneDragOver);
