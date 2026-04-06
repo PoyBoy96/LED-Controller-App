@@ -76,8 +76,20 @@
         <div class="control-card">
           <div class="section-label">Scene</div>
           <div class="field-row">
-            <input id="imageUploadInput" type="file" accept="image/*" />
+            <input id="imageUploadInput" type="file" accept="image/png,image/jpeg" />
           </div>
+          <div class="field-row grid-builder-row">
+            <label class="compact-field" for="gridLengthInput">
+              <span>L</span>
+              <input id="gridLengthInput" type="number" min="1" max="50" step="1" value="10" />
+            </label>
+            <label class="compact-field" for="gridWidthInput">
+              <span>W</span>
+              <input id="gridWidthInput" type="number" min="1" max="50" step="1" value="5" />
+            </label>
+            <button id="buildGridBtn" type="button">Build Grid</button>
+          </div>
+          <div class="meta-row" id="gridBuilderSummary">Build a serpentine grid and keyboard map in edit mode.</div>
           <div class="meta-row" id="layoutMeta">Waiting for layout...</div>
         </div>
 
@@ -106,7 +118,7 @@
 
           <div id="sceneStage" class="scene-stage">
             <div id="scenePlaceholder" class="scene-placeholder">
-              Upload a reference image, then drag LEDs into position.
+              Drop a PNG or JPEG here, or choose a file above, then drag LEDs into position.
             </div>
             <img id="sceneImage" class="scene-image" alt="Scene background" />
             <div id="sceneOverlay" class="scene-overlay"></div>

@@ -15,6 +15,8 @@ logger = get_logger("app")
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 STATIC_DIR = BASE_DIR / "static"
+ALLOWED_UPLOAD_SUFFIXES = {".png", ".jpg", ".jpeg"}
+ALLOWED_UPLOAD_MIME_TYPES = {"image/png", "image/jpeg"}
 
 app = Flask(__name__, static_folder=str(STATIC_DIR), static_url_path="/static")
 app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024
@@ -67,6 +69,12 @@ def upload_image():
     upload = request.files.get("image")
     if not upload:
         raise ValueError("No image file was uploaded.")
+    suffix = Path(upload.filename or "").suffix.lower()
+    if suffix not in ALLOWED_UPLOAD_SUFFIXES:
+        raise ValueError("Only PNG and JPEG images are supported.")
+    mimetype = str(upload.mimetype or "").lower()
+    if mimetype and mimetype not in ALLOWED_UPLOAD_MIME_TYPES:
+        raise ValueError("Only PNG and JPEG images are supported.")
     filename = storage.store_upload(upload)
     return jsonify({"filename": filename, "url": f"/uploads/{filename}"})
 

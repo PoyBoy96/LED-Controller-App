@@ -46,13 +46,20 @@ DEFAULT_ALLOWED_KEYS = [
 ]
 
 
+def default_key_for_led(physical_id: int) -> str:
+    index = int(physical_id) - 1
+    if 0 <= index < len(DEFAULT_ALLOWED_KEYS):
+        return DEFAULT_ALLOWED_KEYS[index]
+    return ""
+
+
 def make_default_led(physical_id: int) -> dict[str, Any]:
     return {
         "physical_id": physical_id,
         "display_name": "",
         "x": None,
         "y": None,
-        "key": "",
+        "key": default_key_for_led(physical_id),
         "placed": False,
     }
 

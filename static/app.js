@@ -16,6 +16,10 @@ const ui = {
   stopPlaybackBtn: document.getElementById("stopPlaybackBtn"),
   deleteRecordingBtn: document.getElementById("deleteRecordingBtn"),
   imageUploadInput: document.getElementById("imageUploadInput"),
+  gridLengthInput: document.getElementById("gridLengthInput"),
+  gridWidthInput: document.getElementById("gridWidthInput"),
+  buildGridBtn: document.getElementById("buildGridBtn"),
+  gridBuilderSummary: document.getElementById("gridBuilderSummary"),
   brightnessSlider: document.getElementById("brightnessSlider"),
   brightnessValue: document.getElementById("brightnessValue"),
   lightingSummary: document.getElementById("lightingSummary"),
@@ -46,10 +50,20 @@ const state = {
   sceneImageVersion: 0,
   sceneImagePreviewUrl: "",
   lightingSaveTimer: null,
+  lightingRequestInFlight: false,
+  lightingPendingSave: false,
+  lightingPendingSaveSilent: true,
+  lightingLastSentAt: 0,
   uploadInFlight: false,
   selectedRecordingId: "",
   recordingMenuOpen: false,
+  sceneFileDragActive: false,
 };
+
+const IMAGE_UPLOAD_ERROR = "Only PNG and JPEG images are supported.";
+const IMAGE_UPLOAD_MIME_TYPES = new Set(["image/png", "image/jpeg"]);
+const IMAGE_UPLOAD_EXTENSIONS = [".png", ".jpg", ".jpeg"];
+const LIGHTING_PREVIEW_INTERVAL_MS = 45;
 
 async function api(path, options = {}) {
   const config = {
@@ -235,6 +249,59 @@ function showError(error) {
   window.alert(error.message || String(error));
 }
 
+function getFileExtension(filename) {
+  const name = String(filename || "").toLowerCase();
+  const match = name.match(/(\.[^.]+)$/);
+  return match ? match[1] : "";
+}
+
+function isAllowedImageFile(file) {
+  if (!file) {
+    return false;
+  }
+  const mimeType = String(file.type || "").toLowerCase();
+  if (mimeType && IMAGE_UPLOAD_MIME_TYPES.has(mimeType)) {
+    return true;
+  }
+  return IMAGE_UPLOAD_EXTENSIONS.includes(getFileExtension(file.name));
+}
+
+function validateImageFile(file) {
+  if (!isAllowedImageFile(file)) {
+    throw new Error(IMAGE_UPLOAD_ERROR);
+  }
+  return file;
+}
+
+function ensureEditLayout() {
+  if (state.editMode && state.localLayout) {
+    return true;
+  }
+  if (!state.server?.layout) {
+    return false;
+  }
+  setEditMode(true);
+  return Boolean(state.localLayout);
+}
+
+function setSceneFileDragActive(nextValue) {
+  state.sceneFileDragActive = Boolean(nextValue);
+  ui.sceneStage.classList.toggle("file-drag-active", state.sceneFileDragActive);
+}
+
+function eventHasFiles(event) {
+  const types = Array.from(event.dataTransfer?.types || []);
+  if (types.includes("Files")) {
+    return true;
+  }
+  return (event.dataTransfer?.files?.length || 0) > 0;
+}
+
+function getDroppedImageFile(event) {
+  const files = Array.from(event.dataTransfer?.files || []);
+  return files[0] || null;
+}
+
 function getModifierColor(event) {
   if (event?.shiftKey) {
     return [0, 255, 0];
@@ -277,6 +344,94 @@ function updateLocalLed(physicalId, changes) {
     return;
   }
   Object.assign(target, changes);
+}
+
+function parsePositiveInteger(value, fieldLabel) {
+  const normalized = Number(value);
+  if (!Number.isInteger(normalized) || normalized < 1) {
+    throw new Error(`${fieldLabel} must be a whole number greater than 0.`);
+  }
+  return normalized;
+}
+
+function getDefaultKeyOrder() {
+  if (!Array.isArray(state.server?.settings?.allowed_keys)) {
+    return [];
+  }
+  return state.server.settings.allowed_keys.map((key) => String(key).trim().toUpperCase()).filter(Boolean);
+}
+
+function getGridAxisPosition(index, count, minimum, maximum) {
+  if (count <= 1) {
+    return 50;
+  }
+  const span = maximum - minimum;
+  return minimum + (span * index) / (count - 1);
+}
+
+function renderGridBuilderSummary(maxLights) {
+  const lengthValue = Number(ui.gridLengthInput.value);
+  const widthValue = Number(ui.gridWidthInput.value);
+  const lengthValid = Number.isInteger(lengthValue) && lengthValue > 0;
+  const widthValid = Number.isInteger(widthValue) && widthValue > 0;
+
+  if (!state.editMode) {
+    ui.gridBuilderSummary.textContent = "Enter edit mode to build a serpentine grid and key map.";
+    return;
+  }
+
+  if (!lengthValid || !widthValid) {
+    ui.gridBuilderSummary.textContent = `Set L and W to whole numbers. Max ${maxLights} lights.`;
+    return;
+  }
+
+  const totalLights = lengthValue * widthValue;
+  if (totalLights > maxLights) {
+    ui.gridBuilderSummary.textContent = `Grid needs ${totalLights} lights. Max ${maxLights}.`;
+    return;
+  }
+
+    ui.gridBuilderSummary.textContent = `Builds ${totalLights} lights in a serpentine grid and keyboard order.`;
+}
+
+function buildGridLayout() {
+  if (!state.editMode || !state.localLayout || !state.server) {
+    return;
+  }
+
+  const length = parsePositiveInteger(ui.gridLengthInput.value, "L");
+  const width = parsePositiveInteger(ui.gridWidthInput.value, "W");
+  const maxLights = state.server.settings?.led_count ?? state.localLayout.leds.length;
+  const totalLights = length * width;
+
+  if (totalLights > maxLights) {
+    throw new Error(`Grid ${length} x ${width} needs ${totalLights} lights, but only ${maxLights} are available.`);
+  }
+
+  const keyOrder = getDefaultKeyOrder();
+  const xMinimum = 10;
+  const xMaximum = 90;
+  const yMinimum = 12;
+  const yMaximum = 88;
+
+  state.localLayout.leds.forEach((led) => {
+    if (led.physical_id > totalLights) {
+      led.placed = false;
+      led.x = null;
+      led.y = null;
+      led.key = "";
+      return;
+    }
+
+    const zeroBasedIndex = led.physical_id - 1;
+    const rowIndex = Math.floor(zeroBasedIndex / length);
+    const stepIndex = zeroBasedIndex % length;
+    const columnIndex = rowIndex % 2 === 0 ? stepIndex : length - 1 - stepIndex;
+    led.placed = true;
+    led.x = Number(getGridAxisPosition(columnIndex, length, xMinimum, xMaximum).toFixed(3));
+    led.y = Number(getGridAxisPosition(rowIndex, width, yMinimum, yMaximum).toFixed(3));
+    led.key = keyOrder[zeroBasedIndex] || "";
+  });
 }
 
 function closeRecordingMenu() {
@@ -413,9 +568,13 @@ function render() {
   ui.saveRecordingBtn.disabled = !recording.unsaved;
   ui.editToggleBtn.disabled = state.uploadInFlight;
   ui.saveLayoutBtn.disabled = !state.editMode || state.uploadInFlight;
-  ui.imageUploadInput.disabled = !state.editMode || state.uploadInFlight;
+  ui.imageUploadInput.disabled = state.uploadInFlight;
+  ui.gridLengthInput.disabled = !state.editMode || state.uploadInFlight;
+  ui.gridWidthInput.disabled = !state.editMode || state.uploadInFlight;
+  ui.buildGridBtn.disabled = !state.editMode || state.uploadInFlight;
 
   renderLightingControls(settings);
+  renderGridBuilderSummary(layout.leds.length);
   renderSidebar(layout, activeIds);
   renderScene(layout, activeIds);
 }
@@ -482,7 +641,9 @@ function renderLightingControls(settings) {
     return;
   }
 
-  ui.brightnessSlider.value = String(settings.default_brightness ?? 96);
+  if (document.activeElement !== ui.brightnessSlider) {
+    ui.brightnessSlider.value = String(settings.default_brightness ?? 96);
+  }
   ui.brightnessValue.textContent = ui.brightnessSlider.value;
   ui.brightnessSlider.disabled = false;
   ui.lightingSummary.textContent = "Hold Shift for red, Ctrl for green, Alt for blue. No modifier stays white.";
@@ -610,7 +771,9 @@ function renderScene(layout, activeIds) {
 
   if (!hasImage) {
     ui.scenePlaceholder.style.display = "grid";
-    ui.scenePlaceholder.textContent = "Upload a reference image, then drag LEDs into position.";
+    ui.scenePlaceholder.textContent = state.editMode
+      ? "Drop a PNG or JPEG here, or choose a file above, then drag LEDs into position."
+      : "Drop a PNG or JPEG here, or choose a file above to start editing.";
   } else if (state.sceneImageLoadState === "loading") {
     ui.scenePlaceholder.style.display = "grid";
     ui.scenePlaceholder.textContent = "Loading scene image...";
@@ -812,11 +975,47 @@ async function saveLightingSettings({ silent = false } = {}) {
   }
 }
 
-function queueSaveLightingSettings() {
+async function flushLightingSettings() {
+  if (!state.server?.settings || !state.lightingPendingSave || state.lightingRequestInFlight) {
+    return;
+  }
+
+  const silent = state.lightingPendingSaveSilent;
+  state.lightingPendingSave = false;
+  state.lightingPendingSaveSilent = true;
+  state.lightingRequestInFlight = true;
+  state.lightingLastSentAt = Date.now();
+
+  try {
+    await saveLightingSettings({ silent });
+  } catch (error) {
+    if (!silent) {
+      showError(error);
+    }
+  } finally {
+    state.lightingRequestInFlight = false;
+    if (state.lightingPendingSave) {
+      queueSaveLightingSettings({ immediate: true, silent: state.lightingPendingSaveSilent });
+    }
+  }
+}
+
+function queueSaveLightingSettings({ immediate = false, silent = true } = {}) {
+  const alreadyPending = state.lightingPendingSave;
+  state.lightingPendingSave = true;
+  state.lightingPendingSaveSilent = alreadyPending ? state.lightingPendingSaveSilent && silent : silent;
+
+  if (state.lightingRequestInFlight) {
+    return;
+  }
+
   window.clearTimeout(state.lightingSaveTimer);
+  const elapsed = Date.now() - state.lightingLastSentAt;
+  const delay = immediate ? 0 : Math.max(0, LIGHTING_PREVIEW_INTERVAL_MS - elapsed);
   state.lightingSaveTimer = window.setTimeout(() => {
-    void saveLightingSettings();
-  }, 120);
+    state.lightingSaveTimer = null;
+    void flushLightingSettings();
+  }, delay);
 }
 
 function handleLightingInput() {
@@ -826,7 +1025,14 @@ function handleLightingInput() {
 
   state.server.settings.default_brightness = Number(ui.brightnessSlider.value);
   render();
-  queueSaveLightingSettings();
+  queueSaveLightingSettings({ silent: true });
+}
+
+function handleLightingCommit() {
+  if (!state.server?.settings) {
+    return;
+  }
+  queueSaveLightingSettings({ immediate: true, silent: false });
 }
 
 async function uploadImage(file) {
@@ -857,9 +1063,20 @@ async function uploadImage(file) {
   }
 }
 
-function handleImageSelection(event) {
-  const file = event.target.files[0];
-  if (!state.editMode || !state.localLayout || !file) {
+function beginImageUpload(file) {
+  if (!file || state.uploadInFlight) {
+    return;
+  }
+
+  try {
+    validateImageFile(file);
+  } catch (error) {
+    ui.imageUploadInput.value = "";
+    showError(error);
+    return;
+  }
+
+  if (!ensureEditLayout()) {
     return;
   }
 
@@ -868,6 +1085,20 @@ function handleImageSelection(event) {
   state.sceneImageSource = "";
   render();
   void uploadImage(file);
+}
+
+function handleImageSelection(event) {
+  const file = event.target.files[0];
+  beginImageUpload(file);
+}
+
+function handleBuildGrid() {
+  try {
+    buildGridLayout();
+    render();
+  } catch (error) {
+    showError(error);
+  }
 }
 
 async function startRecording() {
@@ -983,17 +1214,31 @@ async function allOff() {
 }
 
 function handleSceneDragOver(event) {
-  if (!state.editMode) {
+  const hasFiles = eventHasFiles(event);
+  if (!state.editMode && !hasFiles) {
     return;
   }
   event.preventDefault();
+  if (hasFiles) {
+    event.dataTransfer.dropEffect = "copy";
+    setSceneFileDragActive(true);
+  }
 }
 
 function handleSceneDrop(event) {
+  event.preventDefault();
+  setSceneFileDragActive(false);
+
+  if (eventHasFiles(event)) {
+    const file = getDroppedImageFile(event);
+    beginImageUpload(file);
+    return;
+  }
+
   if (!state.editMode) {
     return;
   }
-  event.preventDefault();
+
   const physicalId = Number(event.dataTransfer.getData("text/plain"));
   if (!physicalId) {
     return;
@@ -1001,6 +1246,12 @@ function handleSceneDrop(event) {
   const { x, y } = calculatePercentPosition(event.clientX, event.clientY);
   updateLocalLed(physicalId, { placed: true, x, y });
   render();
+}
+
+function handleSceneDragLeave(event) {
+  if (!ui.sceneStage.contains(event.relatedTarget)) {
+    setSceneFileDragActive(false);
+  }
 }
 
 function handleGlobalKeydown(event) {
@@ -1076,11 +1327,25 @@ ui.recordingPickerBtn.addEventListener("click", () => {
   toggleRecordingMenu();
 });
 ui.imageUploadInput.addEventListener("change", handleImageSelection);
+ui.gridLengthInput.addEventListener("input", () => {
+  if (state.server) {
+    renderGridBuilderSummary(state.server.layout.leds.length);
+  }
+});
+ui.gridWidthInput.addEventListener("input", () => {
+  if (state.server) {
+    renderGridBuilderSummary(state.server.layout.leds.length);
+  }
+});
+ui.buildGridBtn.addEventListener("click", handleBuildGrid);
 ui.brightnessSlider.addEventListener("input", handleLightingInput);
+ui.brightnessSlider.addEventListener("change", handleLightingCommit);
 ui.sceneStage.addEventListener("dragover", handleSceneDragOver);
 ui.sceneStage.addEventListener("drop", handleSceneDrop);
+ui.sceneStage.addEventListener("dragleave", handleSceneDragLeave);
 ui.sceneOverlay.addEventListener("dragover", handleSceneDragOver);
 ui.sceneOverlay.addEventListener("drop", handleSceneDrop);
+ui.sceneOverlay.addEventListener("dragleave", handleSceneDragLeave);
 ui.sceneImage.addEventListener("load", () => {
   state.sceneImageLoadState = "loaded";
   render();
