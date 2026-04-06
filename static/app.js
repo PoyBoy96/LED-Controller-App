@@ -356,13 +356,6 @@ function parsePositiveInteger(value, fieldLabel) {
   return normalized;
 }
 
-function getDefaultKeyOrder() {
-  if (!Array.isArray(state.server?.settings?.allowed_keys)) {
-    return [];
-  }
-  return state.server.settings.allowed_keys.map((key) => String(key).trim().toUpperCase()).filter(Boolean);
-}
-
 function getGridAxisPosition(index, count, minimum, maximum) {
   if (count <= 1) {
     return 50;
@@ -378,7 +371,7 @@ function renderGridBuilderSummary(maxLights) {
   const widthValid = Number.isInteger(widthValue) && widthValue > 0;
 
   if (!state.editMode) {
-    ui.gridBuilderSummary.textContent = "Enter edit mode to build a serpentine grid and key map.";
+    ui.gridBuilderSummary.textContent = "Enter edit mode to build a serpentine grid layout.";
     return;
   }
 
@@ -393,7 +386,7 @@ function renderGridBuilderSummary(maxLights) {
     return;
   }
 
-    ui.gridBuilderSummary.textContent = `Builds ${totalLights} lights in a serpentine grid and keyboard order.`;
+  ui.gridBuilderSummary.textContent = `Builds ${totalLights} lights in a serpentine grid layout.`;
 }
 
 function buildGridLayout() {
@@ -410,7 +403,6 @@ function buildGridLayout() {
     throw new Error(`Grid ${length} x ${width} needs ${totalLights} lights, but only ${maxLights} are available.`);
   }
 
-  const keyOrder = getDefaultKeyOrder();
   const xMinimum = 10;
   const xMaximum = 90;
   const yMinimum = 12;
@@ -421,7 +413,6 @@ function buildGridLayout() {
       led.placed = false;
       led.x = null;
       led.y = null;
-      led.key = "";
       return;
     }
 
@@ -432,7 +423,6 @@ function buildGridLayout() {
     led.placed = true;
     led.x = Number(getGridAxisPosition(columnIndex, length, xMinimum, xMaximum).toFixed(3));
     led.y = Number(getGridAxisPosition(rowIndex, width, yMinimum, yMaximum).toFixed(3));
-    led.key = keyOrder[zeroBasedIndex] || "";
   });
 }
 
