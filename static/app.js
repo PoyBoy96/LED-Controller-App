@@ -129,6 +129,18 @@ function getActiveLedIds() {
   return Array.isArray(state.server?.active_leds) ? state.server.active_leds : [];
 }
 
+function getActiveLedColorMap() {
+  if (!state.server?.active_led_colors || typeof state.server.active_led_colors !== "object") {
+    return {};
+  }
+  return state.server.active_led_colors;
+}
+
+function getActiveLedColor(physicalId) {
+  const colorMap = getActiveLedColorMap();
+  return colorMap[String(physicalId)] || colorMap[physicalId] || null;
+}
+
 function getActiveIdSet() {
   return new Set(getActiveLedIds());
 }
@@ -138,6 +150,33 @@ function setActiveLedIds(nextIds) {
     return;
   }
   state.server.active_leds = [...nextIds].sort((left, right) => left - right);
+}
+
+function setActiveLedColor(physicalId, color) {
+  if (!state.server) {
+    return;
+  }
+  state.server.active_led_colors = {
+    ...getActiveLedColorMap(),
+    [physicalId]: [...color],
+  };
+}
+
+function removeActiveLedColor(physicalId) {
+  if (!state.server) {
+    return;
+  }
+  const nextColors = { ...getActiveLedColorMap() };
+  delete nextColors[String(physicalId)];
+  delete nextColors[physicalId];
+  state.server.active_led_colors = nextColors;
+}
+
+function colorsMatch(left, right) {
+  if (!Array.isArray(left) || !Array.isArray(right) || left.length !== 3 || right.length !== 3) {
+    return false;
+  }
+  return left.every((value, index) => Number(value) === Number(right[index]));
 }
 
 function getMappedLedIdsForKey(key) {
@@ -198,10 +237,10 @@ function showError(error) {
 
 function getModifierColor(event) {
   if (event?.shiftKey) {
-    return [255, 0, 0];
+    return [0, 255, 0];
   }
   if (event?.ctrlKey) {
-    return [0, 255, 0];
+    return [255, 0, 0];
   }
   if (event?.altKey) {
     return [0, 0, 255];
@@ -651,13 +690,17 @@ function stopMarkerDrag() {
 
 async function triggerLed(physicalId, source, event = null) {
   const previousActiveIds = [...getActiveLedIds()];
+  const previousActiveColors = { ...getActiveLedColorMap() };
   const nextActiveIds = new Set(previousActiveIds);
   const color = getModifierColor(event);
+  const currentColor = getActiveLedColor(physicalId);
 
-  if (nextActiveIds.has(physicalId)) {
+  if (nextActiveIds.has(physicalId) && colorsMatch(currentColor, color)) {
     nextActiveIds.delete(physicalId);
+    removeActiveLedColor(physicalId);
   } else {
     nextActiveIds.add(physicalId);
+    setActiveLedColor(physicalId, color);
   }
 
   setActiveLedIds(nextActiveIds);
@@ -671,6 +714,7 @@ async function triggerLed(physicalId, source, event = null) {
     await loadState({ silent: true, force: true });
   } catch (error) {
     setActiveLedIds(previousActiveIds);
+    state.server.active_led_colors = previousActiveColors;
     render();
     showError(error);
   }
@@ -684,15 +728,20 @@ async function triggerKeyAssignment(key, event = null) {
   }
 
   const previousActiveIds = [...getActiveLedIds()];
+  const previousActiveColors = { ...getActiveLedColorMap() };
   const nextActiveIds = new Set(previousActiveIds);
-  const targetActive = !mappedIds.every((physicalId) => nextActiveIds.has(physicalId));
   const color = getModifierColor(event);
+  const targetActive = !mappedIds.every(
+    (physicalId) => nextActiveIds.has(physicalId) && colorsMatch(getActiveLedColor(physicalId), color)
+  );
 
   mappedIds.forEach((physicalId) => {
     if (targetActive) {
       nextActiveIds.add(physicalId);
+      setActiveLedColor(physicalId, color);
     } else {
       nextActiveIds.delete(physicalId);
+      removeActiveLedColor(physicalId);
     }
   });
 
@@ -707,6 +756,7 @@ async function triggerKeyAssignment(key, event = null) {
     await loadState({ silent: true, force: true });
   } catch (error) {
     setActiveLedIds(previousActiveIds);
+    state.server.active_led_colors = previousActiveColors;
     render();
     showError(error);
   }

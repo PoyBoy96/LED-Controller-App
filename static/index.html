@@ -81,23 +81,6 @@
           <div class="meta-row" id="layoutMeta">Waiting for layout...</div>
         </div>
 
-        <div class="control-card">
-          <div class="section-label">Lighting</div>
-          <div class="lighting-stack">
-            <label class="range-field" for="brightnessSlider">
-              <span>Master Brightness</span>
-              <strong id="brightnessValue">96</strong>
-            </label>
-            <input id="brightnessSlider" type="range" min="0" max="255" step="1" />
-            <div class="modifier-key">
-              <span class="modifier-chip modifier-white">No modifier = White</span>
-              <span class="modifier-chip modifier-red">Shift = Red</span>
-              <span class="modifier-chip modifier-green">Ctrl = Green</span>
-              <span class="modifier-chip modifier-blue">Alt = Blue</span>
-            </div>
-          </div>
-          <div class="meta-row" id="lightingSummary">Brightness applies to every active LED.</div>
-        </div>
       </section>
 
       <main class="workspace-grid">
@@ -127,6 +110,24 @@
             </div>
             <img id="sceneImage" class="scene-image" alt="Scene background" />
             <div id="sceneOverlay" class="scene-overlay"></div>
+          </div>
+
+          <div class="scene-footer-controls">
+            <div class="section-label">Lighting</div>
+            <div class="lighting-stack">
+              <label class="range-field" for="brightnessSlider">
+                <span>Master Brightness</span>
+                <strong id="brightnessValue">96</strong>
+              </label>
+              <input id="brightnessSlider" type="range" min="0" max="255" step="1" />
+              <div class="modifier-key">
+                <span class="modifier-chip modifier-white">No modifier = White</span>
+                <span class="modifier-chip modifier-red">Shift = Red</span>
+                <span class="modifier-chip modifier-green">Ctrl = Green</span>
+                <span class="modifier-chip modifier-blue">Alt = Blue</span>
+              </div>
+            </div>
+            <div class="meta-row" id="lightingSummary">Brightness applies to every active LED.</div>
           </div>
         </section>
       </main>

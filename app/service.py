@@ -45,6 +45,10 @@ def normalize_color(value: Any, field_name: str = "color") -> list[int]:
     ]
 
 
+def colors_match(left: list[int] | None, right: list[int] | None) -> bool:
+    return normalize_color(left) == normalize_color(right)
+
+
 class LedControlService:
     def __init__(self, storage: JsonStorage):
         self.storage = storage
@@ -398,12 +402,15 @@ class LedControlService:
 
     def toggle_light(self, physical_id: int, source: str = "click", color: list[int] | None = None) -> dict[str, Any]:
         with self.lock:
+            target_color = normalize_color(color)
+            current_color = self.active_colors.get(physical_id)
+            should_turn_off = physical_id in self.active_ids and colors_match(current_color, target_color)
             return self._set_light_state(
                 physical_id,
-                active=physical_id not in self.active_ids,
+                active=not should_turn_off,
                 source=source,
                 record_event=True,
-                color=color,
+                color=target_color,
             )
 
     def set_light(
@@ -422,6 +429,7 @@ class LedControlService:
             raise ValueError("Key is required.")
 
         with self.lock:
+            target_color = normalize_color(color)
             physical_ids = [
                 led["physical_id"]
                 for led in self.layout["leds"]
@@ -430,7 +438,10 @@ class LedControlService:
             if not physical_ids:
                 raise ValueError(f"No lights are assigned to key '{normalized_key}'.")
 
-            target_active = not all(physical_id in self.active_ids for physical_id in physical_ids)
+            target_active = not all(
+                physical_id in self.active_ids and colors_match(self.active_colors.get(physical_id), target_color)
+                for physical_id in physical_ids
+            )
             elapsed_ms = None
             if self.recording_session:
                 elapsed_ms = (time.perf_counter() - self.recording_session["started_at"]) * 1000
@@ -442,10 +453,10 @@ class LedControlService:
                     active=target_active,
                     source="keypress",
                     record_event=False,
-                    color=color,
+                    color=target_color,
                 )
                 if self.recording_session:
-                    event_color = normalize_color(color) if target_active else previous_color
+                    event_color = target_color if target_active else previous_color
                     self._record_event_at(
                         physical_id,
                         target_active,
@@ -613,6 +624,7 @@ class LedControlService:
                 self.driver.clear()
                 with self.lock:
                     self.active_ids.clear()
+                    self.active_colors.clear()
 
                 started_at = time.perf_counter()
                 for event in recording.get("events", []):
