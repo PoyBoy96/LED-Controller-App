@@ -145,6 +145,14 @@ h1 {
   border-top: 1px solid rgba(255, 255, 255, 0.08);
 }
 
+.playback-options {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.08);
+  display: grid;
+  gap: 10px;
+}
+
 .grid-builder-row {
   align-items: end;
 }

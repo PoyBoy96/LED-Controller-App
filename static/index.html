@@ -80,6 +80,18 @@
               Loop
             </label>
           </div>
+          <div id="randomPlaybackControls" class="playback-options" hidden>
+            <label class="range-field" for="randomChaosSlider">
+              <span>Chaos</span>
+              <strong id="randomChaosValue">1</strong>
+            </label>
+            <input id="randomChaosSlider" type="range" min="1" max="10" step="1" value="1" />
+            <label class="checkbox-row">
+              <input id="randomRgbToggle" type="checkbox" />
+              Random RGB
+            </label>
+            <div class="meta-row" id="randomPlaybackSummary">Random playback will flash one white light at a time.</div>
+          </div>
           <div class="button-row">
             <button id="playBtn" class="accent">Play</button>
             <button id="stopPlaybackBtn">Stop</button>
@@ -132,9 +144,9 @@
             <div class="lighting-stack">
               <label class="range-field" for="brightnessSlider">
                 <span>Master Brightness</span>
-                <strong id="brightnessValue">96</strong>
+                <strong id="brightnessValue">100%</strong>
               </label>
-              <input id="brightnessSlider" type="range" min="0" max="255" step="1" />
+              <input id="brightnessSlider" type="range" min="0" max="100" step="1" value="100" />
               <div class="modifier-key">
                 <span class="modifier-chip modifier-white">No modifier = White</span>
                 <span class="modifier-chip modifier-red">Shift = Red</span>

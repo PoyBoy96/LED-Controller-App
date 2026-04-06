@@ -13,6 +13,11 @@ const ui = {
   recordingPickerLabel: document.getElementById("recordingPickerLabel"),
   recordingMenu: document.getElementById("recordingMenu"),
   playbackLoopToggle: document.getElementById("playbackLoopToggle"),
+  randomPlaybackControls: document.getElementById("randomPlaybackControls"),
+  randomChaosSlider: document.getElementById("randomChaosSlider"),
+  randomChaosValue: document.getElementById("randomChaosValue"),
+  randomRgbToggle: document.getElementById("randomRgbToggle"),
+  randomPlaybackSummary: document.getElementById("randomPlaybackSummary"),
   playBtn: document.getElementById("playBtn"),
   stopPlaybackBtn: document.getElementById("stopPlaybackBtn"),
   deleteRecordingBtn: document.getElementById("deleteRecordingBtn"),
@@ -60,6 +65,10 @@ const state = {
   selectedRecordingId: "",
   recordingMenuOpen: false,
   sceneFileDragActive: false,
+  randomPlaybackOptions: {
+    chaos: 1,
+    rgb: false,
+  },
 };
 
 const IMAGE_UPLOAD_ERROR = "Only PNG and JPEG images are supported.";
@@ -88,6 +97,12 @@ const KEY_LABELS = {
   ARROWDOWN: "↓",
   ARROWRIGHT: "→",
 };
+const RANDOM_PLAYBACK_PRESET_ID = "preset-random";
+const DEFAULT_RANDOM_PLAYBACK_OPTIONS = {
+  chaos: 1,
+  rgb: false,
+};
+const MAX_BRIGHTNESS = 255;
 
 async function api(path, options = {}) {
   const config = {
@@ -280,6 +295,25 @@ function normalizeKeyBinding(key) {
 function formatKeyBindingLabel(key) {
   const normalized = normalizeKeyBinding(key);
   return KEY_LABELS[normalized] || normalized;
+}
+
+function clampNumber(value, minimum, maximum) {
+  return Math.max(minimum, Math.min(maximum, Number(value)));
+}
+
+function normalizeRandomPlaybackOptions(options = {}) {
+  return {
+    chaos: Math.round(clampNumber(options.chaos ?? DEFAULT_RANDOM_PLAYBACK_OPTIONS.chaos, 1, 10)),
+    rgb: Boolean(options.rgb),
+  };
+}
+
+function brightnessValueToPercent(value) {
+  return Math.round((clampNumber(value, 0, MAX_BRIGHTNESS) / MAX_BRIGHTNESS) * 100);
+}
+
+function brightnessPercentToValue(percent) {
+  return Math.round((clampNumber(percent, 0, 100) / 100) * MAX_BRIGHTNESS);
 }
 
 function getFileExtension(filename) {
@@ -589,6 +623,9 @@ function render() {
   }
 
   const playback = state.server.playback;
+  if (playback.recording_id === RANDOM_PLAYBACK_PRESET_ID && playback.random_options) {
+    state.randomPlaybackOptions = normalizeRandomPlaybackOptions(playback.random_options);
+  }
   ui.playbackSummary.textContent = playback.active
     ? `Playing "${playback.recording_name}"${playback.loop ? " in loop" : ""}.`
     : "Playback idle";
@@ -599,6 +636,7 @@ function render() {
   ui.driverDot.classList.toggle("mock", state.server.driver.mode !== "real");
 
   renderRecordingPicker(selectedRecording);
+  renderRandomPlaybackControls(selectedRecording, playback, recording);
 
   ui.recordBtn.disabled = recording.active || playback.active || state.editMode;
   ui.stopRecordBtn.disabled = !recording.active;
@@ -678,15 +716,38 @@ function renderRecordingPicker(selectedRecording) {
   });
 }
 
+function renderRandomPlaybackControls(selectedRecording, playback, recording) {
+  const visible = selectedRecording?.id === RANDOM_PLAYBACK_PRESET_ID;
+  ui.randomPlaybackControls.hidden = !visible;
+  if (!visible) {
+    return;
+  }
+
+  const options = normalizeRandomPlaybackOptions(state.randomPlaybackOptions);
+  state.randomPlaybackOptions = options;
+  if (document.activeElement !== ui.randomChaosSlider) {
+    ui.randomChaosSlider.value = String(options.chaos);
+  }
+  ui.randomChaosValue.textContent = String(options.chaos);
+  ui.randomRgbToggle.checked = options.rgb;
+  const disabled = Boolean(recording.active || playback.active);
+  ui.randomChaosSlider.disabled = disabled;
+  ui.randomRgbToggle.disabled = disabled;
+  ui.randomPlaybackSummary.textContent = options.rgb
+    ? `Each burst lights 1-${options.chaos} LEDs, with every active LED choosing its own RGB color.`
+    : `Each burst lights 1-${options.chaos} LEDs in white.`;
+}
+
 function renderLightingControls(settings) {
   if (!settings) {
     return;
   }
 
+  const brightnessPercent = brightnessValueToPercent(settings.default_brightness ?? MAX_BRIGHTNESS);
   if (document.activeElement !== ui.brightnessSlider) {
-    ui.brightnessSlider.value = String(settings.default_brightness ?? 96);
+    ui.brightnessSlider.value = String(brightnessPercent);
   }
-  ui.brightnessValue.textContent = ui.brightnessSlider.value;
+  ui.brightnessValue.textContent = `${ui.brightnessSlider.value}%`;
   ui.brightnessSlider.disabled = false;
   ui.lightingSummary.textContent = "Hold Shift for red, Ctrl for green, Alt for blue. No modifier stays white.";
 }
@@ -1079,7 +1140,7 @@ function handleLightingInput() {
     return;
   }
 
-  state.server.settings.default_brightness = Number(ui.brightnessSlider.value);
+  state.server.settings.default_brightness = brightnessPercentToValue(ui.brightnessSlider.value);
   render();
   queueSaveLightingSettings({ silent: true });
 }
@@ -1173,6 +1234,22 @@ function handleResetLayout() {
   render();
 }
 
+function handleRandomChaosInput() {
+  state.randomPlaybackOptions = normalizeRandomPlaybackOptions({
+    ...state.randomPlaybackOptions,
+    chaos: ui.randomChaosSlider.value,
+  });
+  render();
+}
+
+function handleRandomRgbToggle() {
+  state.randomPlaybackOptions = normalizeRandomPlaybackOptions({
+    ...state.randomPlaybackOptions,
+    rgb: ui.randomRgbToggle.checked,
+  });
+  render();
+}
+
 async function startRecording() {
   try {
     await api("/api/recordings/start", { method: "POST" });
@@ -1216,18 +1293,24 @@ async function saveRecording() {
 }
 
 async function startPlayback() {
-  if (!state.selectedRecordingId) {
+  const selectedRecording = getSelectedRecording();
+  if (!state.selectedRecordingId || !selectedRecording) {
     window.alert("Select a recording first.");
     return;
   }
 
   try {
+    const payload = {
+      recording_id: state.selectedRecordingId,
+      loop: ui.playbackLoopToggle.checked,
+    };
+    if (selectedRecording.id === RANDOM_PLAYBACK_PRESET_ID) {
+      payload.random_options = normalizeRandomPlaybackOptions(state.randomPlaybackOptions);
+    }
+
     await api("/api/playback/start", {
       method: "POST",
-      body: JSON.stringify({
-        recording_id: state.selectedRecordingId,
-        loop: ui.playbackLoopToggle.checked,
-      }),
+      body: JSON.stringify(payload),
     });
     await loadState({ silent: true, force: true });
   } catch (error) {
@@ -1411,6 +1494,8 @@ ui.gridWidthInput.addEventListener("input", () => {
 });
 ui.buildGridBtn.addEventListener("click", handleBuildGrid);
 ui.resetLayoutBtn.addEventListener("click", handleResetLayout);
+ui.randomChaosSlider.addEventListener("input", handleRandomChaosInput);
+ui.randomRgbToggle.addEventListener("change", handleRandomRgbToggle);
 ui.brightnessSlider.addEventListener("input", handleLightingInput);
 ui.brightnessSlider.addEventListener("change", handleLightingCommit);
 ui.sceneStage.addEventListener("dragover", handleSceneDragOver);

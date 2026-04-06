@@ -153,7 +153,13 @@ def start_playback():
     recording_id = payload.get("recording_id", "")
     if not recording_id:
         raise ValueError("recording_id is required.")
-    return jsonify(service.start_playback(recording_id, loop=bool(payload.get("loop", False))))
+    return jsonify(
+        service.start_playback(
+            recording_id,
+            loop=bool(payload.get("loop", False)),
+            random_options=payload.get("random_options"),
+        )
+    )
 
 
 @app.post("/api/playback/stop")

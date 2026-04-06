@@ -16,6 +16,16 @@ from .storage import JsonStorage
 
 logger = get_logger("service")
 WHITE_COLOR = [255, 255, 255]
+RANDOM_PRESET_ID = "preset-random"
+DEFAULT_RANDOM_PLAYBACK_OPTIONS = {
+    "chaos": 1,
+    "rgb": False,
+}
+RANDOM_RGB_COLORS = (
+    [255, 0, 0],
+    [0, 255, 0],
+    [0, 0, 255],
+)
 
 
 def slugify(value: str) -> str:
@@ -75,6 +85,7 @@ class LedControlService:
             "recording_name": "",
             "loop": False,
             "started_at": None,
+            "random_options": None,
         }
         self.playback_stop_event = threading.Event()
         self.playback_thread: threading.Thread | None = None
@@ -237,46 +248,68 @@ class LedControlService:
             "events": events,
         }
 
-    def _build_random_preset(self) -> dict[str, Any]:
-        rng = random.Random(2811)
+    def _normalize_random_playback_options(self, options: dict[str, Any] | None = None) -> dict[str, Any]:
+        payload = options or {}
+        return {
+            "chaos": clamp_int(
+                payload.get("chaos", DEFAULT_RANDOM_PLAYBACK_OPTIONS["chaos"]),
+                1,
+                10,
+                "random_options.chaos",
+            ),
+            "rgb": bool(payload.get("rgb", DEFAULT_RANDOM_PLAYBACK_OPTIONS["rgb"])),
+        }
+
+    def _build_random_preset(
+        self,
+        random_options: dict[str, Any] | None = None,
+        seed: int | None = 2811,
+    ) -> dict[str, Any]:
+        options = self._normalize_random_playback_options(random_options)
+        rng = random.Random(seed)
         led_count = self.settings["led_count"]
         step_ms = 100
         pulse_ms = 65
         total_steps = 50
+        max_active = min(options["chaos"], led_count)
         events = []
         for index in range(total_steps):
-            physical_id = rng.randint(1, led_count)
             started_at = index * step_ms
-            events.append(
-                {
-                    "timestamp_ms": started_at,
-                    "trigger_type": "preset",
-                    "physical_id": physical_id,
-                    "display_name_snapshot": f"LED {physical_id}",
-                    "action": "on",
-                    "active": True,
-                    "color": WHITE_COLOR.copy(),
-                }
-            )
-            events.append(
-                {
-                    "timestamp_ms": started_at + pulse_ms,
-                    "trigger_type": "preset",
-                    "physical_id": physical_id,
-                    "display_name_snapshot": f"LED {physical_id}",
-                    "action": "off",
-                    "active": False,
-                }
-            )
+            active_count = rng.randint(1, max_active)
+            physical_ids = rng.sample(range(1, led_count + 1), k=active_count)
+            for physical_id in physical_ids:
+                color = deepcopy(rng.choice(RANDOM_RGB_COLORS) if options["rgb"] else WHITE_COLOR)
+                events.append(
+                    {
+                        "timestamp_ms": started_at,
+                        "trigger_type": "preset",
+                        "physical_id": physical_id,
+                        "display_name_snapshot": f"LED {physical_id}",
+                        "action": "on",
+                        "active": True,
+                        "color": color,
+                    }
+                )
+                events.append(
+                    {
+                        "timestamp_ms": started_at + pulse_ms,
+                        "trigger_type": "preset",
+                        "physical_id": physical_id,
+                        "display_name_snapshot": f"LED {physical_id}",
+                        "action": "off",
+                        "active": False,
+                    }
+                )
 
         return {
-            "id": "preset-random",
+            "id": RANDOM_PRESET_ID,
             "name": "Random",
             "created_at": "2026-03-31T00:00:01+00:00",
             "started_at": "2026-03-31T00:00:01+00:00",
             "duration_ms": 5000,
             "loop_preference": False,
             "is_preset": True,
+            "random_options": options,
             "events": events,
         }
 
@@ -582,7 +615,12 @@ class LedControlService:
             logger.info("recording deleted id=%s", recording_id)
             return {"deleted": True, "recording_id": recording_id}
 
-    def start_playback(self, recording_id: str, loop: bool = False) -> dict[str, Any]:
+    def start_playback(
+        self,
+        recording_id: str,
+        loop: bool = False,
+        random_options: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         with self.lock:
             if self.recording_session:
                 raise ValueError("Stop recording before playback.")
@@ -593,6 +631,13 @@ class LedControlService:
             if not recording:
                 raise ValueError("Recording not found.")
 
+            playback_random_options = None
+            playback_recording = deepcopy(recording)
+            if recording["id"] == RANDOM_PRESET_ID:
+                playback_random_options = self._normalize_random_playback_options(random_options)
+                playback_recording["generator"] = RANDOM_PRESET_ID
+                playback_recording["random_options"] = deepcopy(playback_random_options)
+
             self.playback_stop_event = threading.Event()
             self.playback_state = {
                 "active": True,
@@ -600,19 +645,21 @@ class LedControlService:
                 "recording_name": recording["name"],
                 "loop": bool(loop),
                 "started_at": datetime.now(timezone.utc).isoformat(),
+                "random_options": deepcopy(playback_random_options),
             }
             self.playback_thread = threading.Thread(
                 target=self._run_playback,
-                args=(deepcopy(recording), bool(loop), self.playback_stop_event),
+                args=(playback_recording, bool(loop), self.playback_stop_event),
                 daemon=True,
             )
             self.playback_thread.start()
             logger.info(
-                "playback started recording_id=%s recording_name=%s loop=%s event_count=%s",
+                "playback started recording_id=%s recording_name=%s loop=%s event_count=%s random_options=%s",
                 recording["id"],
                 recording["name"],
                 bool(loop),
-                len(recording.get("events", [])),
+                len(playback_recording.get("events", [])),
+                playback_random_options,
             )
             return deepcopy(self.playback_state)
 
@@ -620,13 +667,20 @@ class LedControlService:
         logger.info("playback thread running recording_id=%s loop=%s", recording.get("id"), loop)
         try:
             while not stop_event.is_set():
+                cycle_recording = recording
+                if recording.get("generator") == RANDOM_PRESET_ID:
+                    cycle_recording = self._build_random_preset(
+                        random_options=recording.get("random_options"),
+                        seed=None,
+                    )
+
                 self.driver.clear()
                 with self.lock:
                     self.active_ids.clear()
                     self.active_colors.clear()
 
                 started_at = time.perf_counter()
-                for event in recording.get("events", []):
+                for event in cycle_recording.get("events", []):
                     target_time = float(event.get("timestamp_ms", 0)) / 1000
                     while not stop_event.is_set():
                         remaining = target_time - (time.perf_counter() - started_at)
@@ -657,6 +711,7 @@ class LedControlService:
                     "recording_name": "",
                     "loop": False,
                     "started_at": None,
+                    "random_options": None,
                 }
 
     def stop_playback(self, clear_lights: bool = True) -> dict[str, Any]:
@@ -671,6 +726,7 @@ class LedControlService:
                 "recording_name": "",
                 "loop": False,
                 "started_at": None,
+                "random_options": None,
             }
 
         if thread:
