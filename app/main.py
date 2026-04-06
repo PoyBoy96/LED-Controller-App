@@ -75,7 +75,7 @@ def upload_image():
 def toggle_light(physical_id: int):
     payload = request.get_json(silent=True) or {}
     source = payload.get("source", "click")
-    return jsonify(service.toggle_light(physical_id, source=source))
+    return jsonify(service.toggle_light(physical_id, source=source, color=payload.get("color")))
 
 
 @app.post("/api/lights/<int:physical_id>/set")
@@ -84,7 +84,7 @@ def set_light(physical_id: int):
     if "active" not in payload:
         raise ValueError("Request body must include an 'active' value.")
     source = payload.get("source", "click")
-    return jsonify(service.set_light(physical_id, bool(payload["active"]), source=source))
+    return jsonify(service.set_light(physical_id, bool(payload["active"]), source=source, color=payload.get("color")))
 
 
 @app.post("/api/lights/all-off")
@@ -97,7 +97,7 @@ def all_off():
 @app.post("/api/keys/trigger")
 def trigger_key():
     payload = request.get_json(force=True, silent=False) or {}
-    return jsonify(service.trigger_key(payload.get("key", "")))
+    return jsonify(service.trigger_key(payload.get("key", ""), color=payload.get("color")))
 
 
 @app.post("/api/recordings/start")

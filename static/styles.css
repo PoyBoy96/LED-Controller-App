@@ -196,15 +196,46 @@ button.danger {
   color: var(--muted);
 }
 
-.checkbox-row-strong {
-  color: var(--text);
-  font-weight: 600;
-}
-
-.lighting-stack,
-.rgb-grid {
+.lighting-stack {
   display: grid;
   gap: 10px;
+}
+
+.modifier-key {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.modifier-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 8px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.06);
+  font-size: 0.82rem;
+}
+
+.modifier-white {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.modifier-red {
+  background: rgba(255, 91, 91, 0.18);
+  border-color: rgba(255, 91, 91, 0.3);
+}
+
+.modifier-green {
+  background: rgba(96, 214, 120, 0.18);
+  border-color: rgba(96, 214, 120, 0.3);
+}
+
+.modifier-blue {
+  background: rgba(77, 156, 255, 0.18);
+  border-color: rgba(77, 156, 255, 0.3);
 }
 
 .range-field {

@@ -15,6 +15,7 @@ from .storage import JsonStorage
 
 
 logger = get_logger("service")
+WHITE_COLOR = [255, 255, 255]
 
 
 def slugify(value: str) -> str:
@@ -32,6 +33,18 @@ def clamp_int(value: Any, minimum: int, maximum: int, field_name: str) -> int:
     return normalized
 
 
+def normalize_color(value: Any, field_name: str = "color") -> list[int]:
+    if value is None:
+        return WHITE_COLOR.copy()
+    if not isinstance(value, (list, tuple)) or len(value) != 3:
+        raise ValueError(f"{field_name} must contain red, green, and blue values.")
+    return [
+        clamp_int(value[0], 0, 255, f"{field_name}.red"),
+        clamp_int(value[1], 0, 255, f"{field_name}.green"),
+        clamp_int(value[2], 0, 255, f"{field_name}.blue"),
+    ]
+
+
 class LedControlService:
     def __init__(self, storage: JsonStorage):
         self.storage = storage
@@ -42,6 +55,7 @@ class LedControlService:
         self._ensure_builtin_presets()
         self.driver = build_led_driver(self.settings)
         self.active_ids: set[int] = set()
+        self.active_colors: dict[int, list[int]] = {}
         self.recording_session: dict[str, Any] | None = None
         self.unsaved_recording: dict[str, Any] | None = None
         logger.info(
@@ -139,7 +153,7 @@ class LedControlService:
 
     def _refresh_driver_settings(self) -> None:
         self.driver.update_settings(self.settings)
-        self.driver.sync_from_ids(self.active_ids)
+        self.driver.sync_from_colors(self.active_colors)
 
     def _validate_layout(self, layout: dict[str, Any]) -> dict[str, Any]:
         normalized = self._normalize_layout(layout)
@@ -195,6 +209,7 @@ class LedControlService:
                     "display_name_snapshot": f"LED {physical_id}",
                     "action": "on",
                     "active": True,
+                    "color": WHITE_COLOR.copy(),
                 }
             )
             events.append(
@@ -237,6 +252,7 @@ class LedControlService:
                     "display_name_snapshot": f"LED {physical_id}",
                     "action": "on",
                     "active": True,
+                    "color": WHITE_COLOR.copy(),
                 }
             )
             events.append(
@@ -264,7 +280,14 @@ class LedControlService:
     def _led_lookup(self) -> dict[int, dict[str, Any]]:
         return {led["physical_id"]: led for led in self.layout["leds"]}
 
-    def _record_event_at(self, physical_id: int, active: bool, source: str, elapsed_ms: float | None = None) -> None:
+    def _record_event_at(
+        self,
+        physical_id: int,
+        active: bool,
+        source: str,
+        elapsed_ms: float | None = None,
+        color: list[int] | None = None,
+    ) -> None:
         if not self.recording_session:
             return
         if source not in {"click", "keypress"}:
@@ -274,38 +297,51 @@ class LedControlService:
         if elapsed_ms is None:
             elapsed_ms = (time.perf_counter() - self.recording_session["started_at"]) * 1000
 
-        self.recording_session["events"].append(
-            {
-                "timestamp_ms": round(elapsed_ms, 3),
-                "trigger_type": source,
-                "physical_id": physical_id,
-                "display_name_snapshot": led.get("display_name", ""),
-                "action": "on" if active else "off",
-                "active": active,
-            }
-        )
+        payload = {
+            "timestamp_ms": round(elapsed_ms, 3),
+            "trigger_type": source,
+            "physical_id": physical_id,
+            "display_name_snapshot": led.get("display_name", ""),
+            "action": "on" if active else "off",
+            "active": active,
+        }
+        if color is not None:
+            payload["color"] = color
+        self.recording_session["events"].append(payload)
 
-    def _record_event(self, physical_id: int, active: bool, source: str) -> None:
-        self._record_event_at(physical_id, active, source)
+    def _record_event(self, physical_id: int, active: bool, source: str, color: list[int] | None = None) -> None:
+        self._record_event_at(physical_id, active, source, color=color)
 
-    def _set_light_state(self, physical_id: int, active: bool, source: str, record_event: bool) -> dict[str, Any]:
+    def _set_light_state(
+        self,
+        physical_id: int,
+        active: bool,
+        source: str,
+        record_event: bool,
+        color: list[int] | None = None,
+    ) -> dict[str, Any]:
         if physical_id < 1 or physical_id > self.settings["led_count"]:
             raise ValueError("Unknown physical LED id.")
 
+        previous_color = self.active_colors.get(physical_id)
+        normalized_color = normalize_color(color) if active else None
         if active:
             self.active_ids.add(physical_id)
+            self.active_colors[physical_id] = normalized_color or WHITE_COLOR.copy()
         else:
             self.active_ids.discard(physical_id)
-        self.driver.set_pixel(physical_id, active)
+            self.active_colors.pop(physical_id, None)
+        self.driver.set_pixel(physical_id, active, color=normalized_color)
 
         if record_event:
-            self._record_event(physical_id, active, source)
+            self._record_event(physical_id, active, source, color=normalized_color if active else previous_color)
 
         result = {
             "physical_id": physical_id,
             "active": active,
             "source": source,
             "active_leds": sorted(self.active_ids),
+            "color": normalized_color if active else None,
         }
         logger.debug(
             "light state physical_id=%s active=%s source=%s record_event=%s active_leds=%s",
@@ -329,6 +365,7 @@ class LedControlService:
                 "settings": deepcopy(self.settings),
                 "layout": deepcopy(self.layout),
                 "active_leds": sorted(self.active_ids),
+                "active_led_colors": deepcopy({physical_id: color for physical_id, color in self.active_colors.items()}),
                 "recording": recording_info,
                 "playback": deepcopy(self.playback_state),
                 "recordings": self.storage.list_recordings(),
@@ -345,10 +382,8 @@ class LedControlService:
             self.storage.save_settings(self.settings)
             self._refresh_driver_settings()
             logger.info(
-                "save_settings brightness=%s active_color=%s all_white_mode=%s active_leds=%s",
+                "save_settings brightness=%s active_leds=%s",
                 self.settings["default_brightness"],
-                self.settings["active_color"],
-                self.settings["all_white_mode"],
                 sorted(self.active_ids),
             )
             return deepcopy(self.settings)
@@ -361,20 +396,27 @@ class LedControlService:
             logger.info("save_layout completed updated_at=%s", self.layout.get("updated_at"))
             return deepcopy(self.layout)
 
-    def toggle_light(self, physical_id: int, source: str = "click") -> dict[str, Any]:
+    def toggle_light(self, physical_id: int, source: str = "click", color: list[int] | None = None) -> dict[str, Any]:
         with self.lock:
             return self._set_light_state(
                 physical_id,
                 active=physical_id not in self.active_ids,
                 source=source,
                 record_event=True,
+                color=color,
             )
 
-    def set_light(self, physical_id: int, active: bool, source: str = "click") -> dict[str, Any]:
+    def set_light(
+        self,
+        physical_id: int,
+        active: bool,
+        source: str = "click",
+        color: list[int] | None = None,
+    ) -> dict[str, Any]:
         with self.lock:
-            return self._set_light_state(physical_id, active=active, source=source, record_event=True)
+            return self._set_light_state(physical_id, active=active, source=source, record_event=True, color=color)
 
-    def trigger_key(self, key: str) -> dict[str, Any]:
+    def trigger_key(self, key: str, color: list[int] | None = None) -> dict[str, Any]:
         normalized_key = str(key).strip().upper()
         if not normalized_key:
             raise ValueError("Key is required.")
@@ -394,9 +436,23 @@ class LedControlService:
                 elapsed_ms = (time.perf_counter() - self.recording_session["started_at"]) * 1000
 
             for physical_id in physical_ids:
-                self._set_light_state(physical_id, active=target_active, source="keypress", record_event=False)
+                previous_color = deepcopy(self.active_colors.get(physical_id, WHITE_COLOR.copy()))
+                self._set_light_state(
+                    physical_id,
+                    active=target_active,
+                    source="keypress",
+                    record_event=False,
+                    color=color,
+                )
                 if self.recording_session:
-                    self._record_event_at(physical_id, target_active, "keypress", elapsed_ms=elapsed_ms)
+                    event_color = normalize_color(color) if target_active else previous_color
+                    self._record_event_at(
+                        physical_id,
+                        target_active,
+                        "keypress",
+                        elapsed_ms=elapsed_ms,
+                        color=event_color,
+                    )
 
             result = {
                 "key": normalized_key,
@@ -416,6 +472,7 @@ class LedControlService:
     def all_off(self, source: str = "system") -> dict[str, Any]:
         with self.lock:
             self.active_ids.clear()
+            self.active_colors.clear()
             self.driver.clear()
             logger.info("all_off source=%s", source)
             return {"active_leds": [], "source": source}
@@ -575,6 +632,7 @@ class LedControlService:
                             bool(event.get("active")),
                             source="playback",
                             record_event=False,
+                            color=event.get("color"),
                         )
 
                 if not loop:

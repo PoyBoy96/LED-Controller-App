@@ -18,13 +18,6 @@ const ui = {
   imageUploadInput: document.getElementById("imageUploadInput"),
   brightnessSlider: document.getElementById("brightnessSlider"),
   brightnessValue: document.getElementById("brightnessValue"),
-  allWhiteToggle: document.getElementById("allWhiteToggle"),
-  redSlider: document.getElementById("redSlider"),
-  redValue: document.getElementById("redValue"),
-  greenSlider: document.getElementById("greenSlider"),
-  greenValue: document.getElementById("greenValue"),
-  blueSlider: document.getElementById("blueSlider"),
-  blueValue: document.getElementById("blueValue"),
   lightingSummary: document.getElementById("lightingSummary"),
   ledList: document.getElementById("ledList"),
   sceneStage: document.getElementById("sceneStage"),
@@ -44,7 +37,6 @@ const ui = {
 const state = {
   server: null,
   localLayout: null,
-  localSettings: null,
   editMode: false,
   draggingMarkerId: null,
   pollTimer: null,
@@ -81,22 +73,11 @@ function cloneLayout(layout) {
   return JSON.parse(JSON.stringify(layout));
 }
 
-function cloneSettings(settings) {
-  return JSON.parse(JSON.stringify(settings));
-}
-
 function getViewLayout() {
   if (state.editMode && state.localLayout) {
     return state.localLayout;
   }
   return state.server?.layout || null;
-}
-
-function getViewSettings() {
-  if (state.editMode && state.localSettings) {
-    return state.localSettings;
-  }
-  return state.server?.settings || null;
 }
 
 function getRecordings() {
@@ -215,6 +196,31 @@ function showError(error) {
   window.alert(error.message || String(error));
 }
 
+function getModifierColor(event) {
+  if (event?.shiftKey) {
+    return [255, 0, 0];
+  }
+  if (event?.ctrlKey) {
+    return [0, 255, 0];
+  }
+  if (event?.altKey) {
+    return [0, 0, 255];
+  }
+  return [255, 255, 255];
+}
+
+function getKeyboardKeyFromEvent(event) {
+  const code = String(event.code || "");
+  if (/^Key[A-Z]$/.test(code)) {
+    return code.slice(3);
+  }
+  if (/^Digit[0-9]$/.test(code)) {
+    return code.slice(5);
+  }
+  const key = String(event.key || "").toUpperCase();
+  return key.length === 1 ? key : "";
+}
+
 function revokeScenePreviewUrl() {
   if (!state.sceneImagePreviewUrl) {
     return;
@@ -232,13 +238,6 @@ function updateLocalLed(physicalId, changes) {
     return;
   }
   Object.assign(target, changes);
-}
-
-function updateLocalSettings(changes) {
-  if (!state.localSettings) {
-    return;
-  }
-  Object.assign(state.localSettings, changes);
 }
 
 function closeRecordingMenu() {
@@ -267,10 +266,8 @@ function setEditMode(nextValue) {
   state.editMode = nextValue;
   if (nextValue) {
     state.localLayout = cloneLayout(state.server.layout);
-    state.localSettings = cloneSettings(state.server.settings);
   } else {
     state.localLayout = null;
-    state.localSettings = null;
     revokeScenePreviewUrl();
   }
   closeRecordingMenu();
@@ -313,7 +310,6 @@ async function loadState({ silent = false, force = false } = {}) {
     state.server = await api("/api/state");
     if (!state.editMode) {
       state.localLayout = null;
-      state.localSettings = null;
     }
     syncSelectedRecording();
     render();
@@ -335,7 +331,7 @@ function render() {
   syncSelectedRecording();
 
   const layout = getViewLayout();
-  const settings = getViewSettings();
+  const settings = state.server?.settings || null;
   const activeIds = getActiveIdSet();
   const placedCount = layout.leds.filter((led) => led.placed).length;
   const selectedRecording = getSelectedRecording();
@@ -447,38 +443,10 @@ function renderLightingControls(settings) {
     return;
   }
 
-  const [red, green, blue] = settings.active_color || [255, 255, 255];
-  const allWhiteMode = Boolean(settings.all_white_mode);
-  const lightingLocked = !state.editMode;
-
   ui.brightnessSlider.value = String(settings.default_brightness ?? 96);
   ui.brightnessValue.textContent = ui.brightnessSlider.value;
-
-  ui.allWhiteToggle.checked = allWhiteMode;
-
-  ui.redSlider.value = String(red);
-  ui.redValue.textContent = ui.redSlider.value;
-
-  ui.greenSlider.value = String(green);
-  ui.greenValue.textContent = ui.greenSlider.value;
-
-  ui.blueSlider.value = String(blue);
-  ui.blueValue.textContent = ui.blueSlider.value;
-
-  ui.brightnessSlider.disabled = lightingLocked;
-  ui.allWhiteToggle.disabled = lightingLocked;
-  ui.redSlider.disabled = lightingLocked || allWhiteMode;
-  ui.greenSlider.disabled = lightingLocked || allWhiteMode;
-  ui.blueSlider.disabled = lightingLocked || allWhiteMode;
-
-  if (lightingLocked) {
-    ui.lightingSummary.textContent = "Lighting settings are editable in edit mode.";
-    return;
-  }
-
-  ui.lightingSummary.textContent = allWhiteMode
-    ? "Active LEDs follow the brightness slider and force pure white."
-    : "Active LEDs update live from brightness and RGB values.";
+  ui.brightnessSlider.disabled = false;
+  ui.lightingSummary.textContent = "Hold Shift for red, Ctrl for green, Alt for blue. No modifier stays white.";
 }
 
 function renderSidebar(layout, activeIds) {
@@ -563,7 +531,7 @@ function renderSidebar(layout, activeIds) {
         if (event.target.closest("button")) {
           return;
         }
-        void triggerLed(led.physical_id, "click");
+        void triggerLed(led.physical_id, "click", event);
       });
 
       const actions = document.createElement("div");
@@ -573,7 +541,7 @@ function renderSidebar(layout, activeIds) {
       toggleButton.textContent = activeIds.has(led.physical_id) ? "Turn Off" : "Turn On";
       toggleButton.addEventListener("click", (event) => {
         event.stopPropagation();
-        void triggerLed(led.physical_id, "click");
+        void triggerLed(led.physical_id, "click", event);
       });
       actions.appendChild(toggleButton);
       row.appendChild(actions);
@@ -631,7 +599,7 @@ function renderScene(layout, activeIds) {
       } else {
         marker.addEventListener("click", (event) => {
           event.stopPropagation();
-          void triggerLed(led.physical_id, "click");
+          void triggerLed(led.physical_id, "click", event);
         });
       }
 
@@ -681,9 +649,10 @@ function stopMarkerDrag() {
   window.removeEventListener("pointermove", handleMarkerDrag);
 }
 
-async function triggerLed(physicalId, source) {
+async function triggerLed(physicalId, source, event = null) {
   const previousActiveIds = [...getActiveLedIds()];
   const nextActiveIds = new Set(previousActiveIds);
+  const color = getModifierColor(event);
 
   if (nextActiveIds.has(physicalId)) {
     nextActiveIds.delete(physicalId);
@@ -697,7 +666,7 @@ async function triggerLed(physicalId, source) {
   try {
     await api(`/api/lights/${physicalId}/toggle`, {
       method: "POST",
-      body: JSON.stringify({ source }),
+      body: JSON.stringify({ source, color }),
     });
     await loadState({ silent: true, force: true });
   } catch (error) {
@@ -707,7 +676,7 @@ async function triggerLed(physicalId, source) {
   }
 }
 
-async function triggerKeyAssignment(key) {
+async function triggerKeyAssignment(key, event = null) {
   const normalizedKey = String(key).trim().toUpperCase();
   const mappedIds = getMappedLedIdsForKey(normalizedKey);
   if (!mappedIds.length) {
@@ -717,6 +686,7 @@ async function triggerKeyAssignment(key) {
   const previousActiveIds = [...getActiveLedIds()];
   const nextActiveIds = new Set(previousActiveIds);
   const targetActive = !mappedIds.every((physicalId) => nextActiveIds.has(physicalId));
+  const color = getModifierColor(event);
 
   mappedIds.forEach((physicalId) => {
     if (targetActive) {
@@ -732,7 +702,7 @@ async function triggerKeyAssignment(key) {
   try {
     await api("/api/keys/trigger", {
       method: "POST",
-      body: JSON.stringify({ key: normalizedKey }),
+      body: JSON.stringify({ key: normalizedKey, color }),
     });
     await loadState({ silent: true, force: true });
   } catch (error) {
@@ -748,12 +718,6 @@ async function saveLayout({ exitEditMode = false } = {}) {
   }
 
   try {
-    if (state.localSettings) {
-      window.clearTimeout(state.lightingSaveTimer);
-      state.lightingSaveTimer = null;
-      await saveLightingSettings({ silent: true });
-    }
-
     const payload = cloneLayout(state.localLayout);
     const response = await api("/api/layout", {
       method: "POST",
@@ -773,31 +737,25 @@ async function saveLayout({ exitEditMode = false } = {}) {
 }
 
 async function saveLightingSettings({ silent = false } = {}) {
-  if (!state.localSettings) {
+  if (!state.server?.settings) {
     return;
   }
 
   try {
     const payload = {
-      default_brightness: Number(state.localSettings.default_brightness),
-      active_color: [...state.localSettings.active_color],
-      all_white_mode: Boolean(state.localSettings.all_white_mode),
+      default_brightness: Number(state.server.settings.default_brightness),
     };
     const response = await api("/api/settings", {
       method: "POST",
       body: JSON.stringify(payload),
     });
     state.server.settings = response.settings;
-    state.localSettings = cloneSettings(response.settings);
     render();
   } catch (error) {
     if (!silent) {
       showError(error);
     }
-    if (state.server?.settings) {
-      state.localSettings = cloneSettings(state.server.settings);
-      render();
-    }
+    void loadState({ silent: true, force: true });
     if (silent) {
       throw error;
     }
@@ -812,19 +770,11 @@ function queueSaveLightingSettings() {
 }
 
 function handleLightingInput() {
-  if (!state.editMode || !state.localSettings) {
+  if (!state.server?.settings) {
     return;
   }
 
-  updateLocalSettings({
-    default_brightness: Number(ui.brightnessSlider.value),
-    all_white_mode: ui.allWhiteToggle.checked,
-    active_color: [
-      Number(ui.redSlider.value),
-      Number(ui.greenSlider.value),
-      Number(ui.blueSlider.value),
-    ],
-  });
+  state.server.settings.default_brightness = Number(ui.brightnessSlider.value);
   render();
   queueSaveLightingSettings();
 }
@@ -1009,7 +959,7 @@ function handleGlobalKeydown(event) {
     return;
   }
 
-  if (state.editMode || !state.server || event.repeat || event.metaKey || event.ctrlKey || event.altKey) {
+  if (state.editMode || !state.server || event.repeat || event.metaKey) {
     return;
   }
 
@@ -1018,14 +968,17 @@ function handleGlobalKeydown(event) {
     return;
   }
 
-  const key = event.key.toUpperCase();
+  const key = getKeyboardKeyFromEvent(event);
+  if (!key) {
+    return;
+  }
   const mappedIds = getMappedLedIdsForKey(key);
   if (!mappedIds.length) {
     return;
   }
 
   event.preventDefault();
-  void triggerKeyAssignment(key);
+  void triggerKeyAssignment(key, event);
 }
 
 function handleWindowPointerDown(event) {
@@ -1074,10 +1027,6 @@ ui.recordingPickerBtn.addEventListener("click", () => {
 });
 ui.imageUploadInput.addEventListener("change", handleImageSelection);
 ui.brightnessSlider.addEventListener("input", handleLightingInput);
-ui.allWhiteToggle.addEventListener("change", handleLightingInput);
-ui.redSlider.addEventListener("input", handleLightingInput);
-ui.greenSlider.addEventListener("input", handleLightingInput);
-ui.blueSlider.addEventListener("input", handleLightingInput);
 ui.sceneStage.addEventListener("dragover", handleSceneDragOver);
 ui.sceneStage.addEventListener("drop", handleSceneDrop);
 ui.sceneOverlay.addEventListener("dragover", handleSceneDragOver);

@@ -85,37 +85,18 @@
           <div class="section-label">Lighting</div>
           <div class="lighting-stack">
             <label class="range-field" for="brightnessSlider">
-              <span>Brightness</span>
+              <span>Master Brightness</span>
               <strong id="brightnessValue">96</strong>
             </label>
             <input id="brightnessSlider" type="range" min="0" max="255" step="1" />
-
-            <label class="checkbox-row checkbox-row-strong">
-              <input id="allWhiteToggle" type="checkbox" />
-              All White
-            </label>
-
-            <div class="rgb-grid">
-              <label class="range-field" for="redSlider">
-                <span>Red</span>
-                <strong id="redValue">255</strong>
-              </label>
-              <input id="redSlider" type="range" min="0" max="255" step="1" />
-
-              <label class="range-field" for="greenSlider">
-                <span>Green</span>
-                <strong id="greenValue">255</strong>
-              </label>
-              <input id="greenSlider" type="range" min="0" max="255" step="1" />
-
-              <label class="range-field" for="blueSlider">
-                <span>Blue</span>
-                <strong id="blueValue">255</strong>
-              </label>
-              <input id="blueSlider" type="range" min="0" max="255" step="1" />
+            <div class="modifier-key">
+              <span class="modifier-chip modifier-white">No modifier = White</span>
+              <span class="modifier-chip modifier-red">Shift = Red</span>
+              <span class="modifier-chip modifier-green">Ctrl = Green</span>
+              <span class="modifier-chip modifier-blue">Alt = Blue</span>
             </div>
           </div>
-          <div class="meta-row" id="lightingSummary">Lighting settings are editable in edit mode.</div>
+          <div class="meta-row" id="lightingSummary">Brightness applies to every active LED.</div>
         </div>
       </section>
 
