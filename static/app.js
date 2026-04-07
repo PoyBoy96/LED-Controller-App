@@ -50,6 +50,10 @@ const state = {
   localLayout: null,
   editMode: false,
   draggingMarkerId: null,
+  draggingMarkerEl: null,
+  markerDragRafId: null,
+  renderRafId: null,
+  touchSelectedLedId: null,
   pollTimer: null,
   loadInFlight: false,
   sceneImageSource: "",
@@ -536,6 +540,7 @@ function setEditMode(nextValue) {
     state.localLayout = cloneLayout(state.server.layout);
   } else {
     state.localLayout = null;
+    state.touchSelectedLedId = null;
     revokeScenePreviewUrl();
   }
   closeRecordingMenu();
@@ -659,6 +664,19 @@ function render() {
   renderScene(layout, activeIds);
 }
 
+// Coalesces multiple render() requests into one per animation frame.
+// Used by high-frequency input handlers (sliders) to avoid rebuilding the DOM
+// 30-60+ times per second during touch drags.
+function scheduleRender() {
+  if (state.renderRafId) {
+    return;
+  }
+  state.renderRafId = requestAnimationFrame(() => {
+    state.renderRafId = null;
+    render();
+  });
+}
+
 function renderRecordingPicker(selectedRecording) {
   const recordings = getRecordings();
 
@@ -757,10 +775,32 @@ function renderSidebar(layout, activeIds) {
 
   layout.leds.forEach((led) => {
     const row = document.createElement("div");
-    row.className = `led-row${activeIds.has(led.physical_id) ? " active" : ""}${state.editMode ? "" : " live compact"}`;
+    const isTouchSelected = state.editMode && state.touchSelectedLedId === led.physical_id;
+    row.className = `led-row${activeIds.has(led.physical_id) ? " active" : ""}${state.editMode ? "" : " live compact"}${isTouchSelected ? " touch-selected" : ""}`;
     row.draggable = state.editMode;
     row.dataset.ledId = String(led.physical_id);
     row.addEventListener("dragstart", handleSidebarDragStart);
+
+    if (state.editMode) {
+      // Tap-to-select for touch users (alternative to HTML5 drag-and-drop).
+      // Tap a sidebar row to highlight it, then tap the scene to place it.
+      row.addEventListener("click", (event) => {
+        if (event.target.closest("input") || event.target.closest("button")) {
+          return;
+        }
+        if (state.touchSelectedLedId === led.physical_id) {
+          state.touchSelectedLedId = null;
+        } else {
+          state.touchSelectedLedId = led.physical_id;
+        }
+        ui.ledList.querySelectorAll(".led-row").forEach((r) => {
+          r.classList.toggle(
+            "touch-selected",
+            Number(r.dataset.ledId) === state.touchSelectedLedId
+          );
+        });
+      });
+    }
 
     const topLine = document.createElement("div");
     topLine.className = "led-topline";
@@ -949,23 +989,71 @@ function startMarkerDrag(event) {
     return;
   }
   event.preventDefault();
-  state.draggingMarkerId = Number(event.currentTarget.dataset.ledId);
-  window.addEventListener("pointermove", handleMarkerDrag);
-  window.addEventListener("pointerup", stopMarkerDrag, { once: true });
+  const target = event.currentTarget;
+  state.draggingMarkerId = Number(target.dataset.ledId);
+  state.draggingMarkerEl = target;
+  // Pointer capture ensures we keep receiving events even if the finger/cursor
+  // moves outside the marker bounds. Critical for touch where fast swipes can
+  // otherwise drop pointer events.
+  try {
+    target.setPointerCapture(event.pointerId);
+  } catch (error) {
+    // Ignore - some browsers may reject capture for synthetic pointers.
+  }
+  // Suppress page scroll/zoom while dragging on touch devices.
+  ui.sceneOverlay.style.touchAction = "none";
+  target.addEventListener("pointermove", handleMarkerDrag);
+  target.addEventListener("pointerup", stopMarkerDrag, { once: true });
+  target.addEventListener("lostpointercapture", stopMarkerDrag, { once: true });
 }
 
 function handleMarkerDrag(event) {
   if (!state.draggingMarkerId) {
     return;
   }
-  const { x, y } = calculatePercentPosition(event.clientX, event.clientY);
-  updateLocalLed(state.draggingMarkerId, { x, y, placed: true });
-  renderScene(getViewLayout(), getActiveIdSet());
+  const clientX = event.clientX;
+  const clientY = event.clientY;
+  if (state.markerDragRafId) {
+    cancelAnimationFrame(state.markerDragRafId);
+  }
+  state.markerDragRafId = requestAnimationFrame(() => {
+    state.markerDragRafId = null;
+    if (!state.draggingMarkerId) {
+      return;
+    }
+    const { x, y } = calculatePercentPosition(clientX, clientY);
+    updateLocalLed(state.draggingMarkerId, { x, y, placed: true });
+    // Update the marker element's position directly. We avoid renderScene()
+    // here because it would destroy and recreate the captured element,
+    // breaking the drag mid-stream.
+    if (state.draggingMarkerEl) {
+      state.draggingMarkerEl.style.left = `${x}%`;
+      state.draggingMarkerEl.style.top = `${y}%`;
+    }
+  });
 }
 
 function stopMarkerDrag() {
+  const el = state.draggingMarkerEl;
   state.draggingMarkerId = null;
-  window.removeEventListener("pointermove", handleMarkerDrag);
+  state.draggingMarkerEl = null;
+  if (state.markerDragRafId) {
+    cancelAnimationFrame(state.markerDragRafId);
+    state.markerDragRafId = null;
+  }
+  ui.sceneOverlay.style.touchAction = "";
+  if (el) {
+    el.removeEventListener("pointermove", handleMarkerDrag);
+    el.removeEventListener("pointerup", stopMarkerDrag);
+    el.removeEventListener("lostpointercapture", stopMarkerDrag);
+  } else {
+    // Defensive cleanup for any legacy window listener.
+    window.removeEventListener("pointermove", handleMarkerDrag);
+  }
+  // Final render to sync the rest of the UI with the new marker position.
+  if (state.server) {
+    renderScene(getViewLayout(), getActiveIdSet());
+  }
 }
 
 async function triggerLed(physicalId, source, event = null) {
@@ -1141,7 +1229,7 @@ function handleLightingInput() {
   }
 
   state.server.settings.default_brightness = brightnessPercentToValue(ui.brightnessSlider.value);
-  render();
+  scheduleRender();
   queueSaveLightingSettings({ silent: true });
 }
 
@@ -1239,7 +1327,7 @@ function handleRandomChaosInput() {
     ...state.randomPlaybackOptions,
     chaos: ui.randomChaosSlider.value,
   });
-  render();
+  scheduleRender();
 }
 
 function handleRandomRgbToggle() {
@@ -1504,6 +1592,20 @@ ui.sceneStage.addEventListener("dragleave", handleSceneDragLeave);
 ui.sceneOverlay.addEventListener("dragover", handleSceneDragOver);
 ui.sceneOverlay.addEventListener("drop", handleSceneDrop);
 ui.sceneOverlay.addEventListener("dragleave", handleSceneDragLeave);
+ui.sceneOverlay.addEventListener("click", (event) => {
+  // Tap-to-place: if a sidebar LED is selected for placement (touch flow),
+  // a tap on empty scene area places it. Ignore taps on existing markers.
+  if (!state.editMode || !state.touchSelectedLedId || !state.localLayout) {
+    return;
+  }
+  if (event.target.closest(".scene-led")) {
+    return;
+  }
+  const { x, y } = calculatePercentPosition(event.clientX, event.clientY);
+  updateLocalLed(state.touchSelectedLedId, { placed: true, x, y });
+  state.touchSelectedLedId = null;
+  render();
+});
 ui.sceneImage.addEventListener("load", () => {
   state.sceneImageLoadState = "loaded";
   render();

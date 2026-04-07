@@ -170,14 +170,28 @@ input[type="file"],
 input[type="number"] {
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 12px;
-  padding: 10px 12px;
+  padding: 10px 14px;
+  min-height: 44px;
   color: var(--text);
   background: rgba(255, 255, 255, 0.06);
 }
 
 input[type="range"] {
   width: 100%;
+  height: 44px;
   accent-color: var(--accent);
+  cursor: pointer;
+}
+
+/* Disable double-tap-to-zoom delay on interactive elements; pinch-zoom still works */
+button,
+a,
+input,
+select,
+.led-row,
+.dropdown-option,
+.checkbox-row {
+  touch-action: manipulation;
 }
 
 button {
@@ -185,8 +199,15 @@ button {
   transition: transform 120ms ease, background 120ms ease, border-color 120ms ease;
 }
 
-button:hover:not(.scene-led):not(.dropdown-option) {
-  transform: translateY(-1px);
+@media (hover: hover) {
+  button:hover:not(.scene-led):not(.dropdown-option) {
+    transform: translateY(-1px);
+    border-color: rgba(255, 255, 255, 0.24);
+  }
+}
+
+button:active:not(.scene-led):not(.dropdown-option):not(:disabled) {
+  transform: translateY(1px);
   border-color: rgba(255, 255, 255, 0.24);
 }
 
@@ -212,7 +233,16 @@ button.danger {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  min-height: 44px;
   color: var(--muted);
+  cursor: pointer;
+}
+
+.checkbox-row input[type="checkbox"] {
+  width: 22px;
+  height: 22px;
+  min-width: 22px;
+  accent-color: var(--accent);
 }
 
 .compact-field {
@@ -340,14 +370,22 @@ button.danger {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 10px 12px;
+  padding: 10px 14px;
+  min-height: 44px;
   border-radius: 12px;
   border: 1px solid transparent;
   background: rgba(255, 255, 255, 0.04);
   text-align: left;
 }
 
-.dropdown-option:hover {
+@media (hover: hover) {
+  .dropdown-option:hover {
+    border-color: rgba(255, 193, 74, 0.28);
+    background: rgba(255, 255, 255, 0.08);
+  }
+}
+
+.dropdown-option:active {
   border-color: rgba(255, 193, 74, 0.28);
   background: rgba(255, 255, 255, 0.08);
 }
@@ -433,7 +471,13 @@ button.danger {
   cursor: pointer;
 }
 
-.led-row.live:hover {
+@media (hover: hover) {
+  .led-row.live:hover {
+    border-color: rgba(255, 193, 74, 0.35);
+  }
+}
+
+.led-row.live:active {
   border-color: rgba(255, 193, 74, 0.35);
 }
 
@@ -444,6 +488,12 @@ button.danger {
 .led-row.active {
   border-color: rgba(255, 193, 74, 0.6);
   box-shadow: inset 0 0 0 1px rgba(255, 193, 74, 0.18);
+}
+
+.led-row.touch-selected {
+  border-color: rgba(86, 214, 168, 0.6);
+  box-shadow: inset 0 0 0 1px rgba(86, 214, 168, 0.25);
+  background: rgba(86, 214, 168, 0.08);
 }
 
 .led-topline {
@@ -578,7 +628,8 @@ button.danger {
 .scene-led {
   position: absolute;
   transform: translate(-50%, -50%);
-  min-width: 44px;
+  min-width: 48px;
+  min-height: 48px;
   padding: 10px 12px;
   border-radius: 999px;
   border: 1px solid rgba(255, 255, 255, 0.16);
@@ -590,7 +641,14 @@ button.danger {
   text-align: center;
 }
 
-.scene-led:hover {
+@media (hover: hover) {
+  .scene-led:hover {
+    transform: translate(-50%, -50%);
+    border-color: rgba(255, 193, 74, 0.45);
+  }
+}
+
+.scene-led:active {
   transform: translate(-50%, -50%);
   border-color: rgba(255, 193, 74, 0.45);
 }
@@ -625,6 +683,21 @@ button.danger {
 
   .sidebar {
     max-height: none;
+  }
+}
+
+@media (max-width: 1024px) {
+  .page-shell {
+    width: min(100vw, calc(100vw - 20px));
+    padding: 16px 0 24px;
+  }
+
+  .sidebar {
+    max-height: 50vh;
+  }
+
+  .scene-stage {
+    max-height: min(60vh, 600px);
   }
 }
 
