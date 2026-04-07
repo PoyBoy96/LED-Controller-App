@@ -1821,9 +1821,11 @@ function createClipElement(clip) {
   const width = Math.max(3, tlMsToPx(clip.endMs - clip.startMs));
   el.style.left = `${left}px`;
   el.style.width = `${width}px`;
+  // Hardware is GRB-ordered, so swap r/g for on-screen preview to match physical output.
   const [r, g, b] = clip.color;
-  el.style.background = `rgb(${r}, ${g}, ${b})`;
-  const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  const dr = g, dg = r, db = b;
+  el.style.background = `rgb(${dr}, ${dg}, ${db})`;
+  const luminance = (0.299 * dr + 0.587 * dg + 0.114 * db) / 255;
   el.style.color = luminance > 0.55 ? "rgba(0,0,0,0.8)" : "rgba(255,255,255,0.92)";
 
   const leftHandle = document.createElement("div");
@@ -2008,7 +2010,12 @@ function handleClipPointerDown(event) {
     t.selectedClipIds = new Set([clipId]);
   }
   t.selectedRowId = clip.ledId;
-  renderTimeline();
+  // Update selection classes in-place — do NOT rebuild DOM here, or
+  // pointer capture below would latch onto a detached element.
+  ui.timelineRows.querySelectorAll(".timeline-clip").forEach((node) => {
+    const id = Number(node.dataset.clipId);
+    node.classList.toggle("selected", t.selectedClipIds.has(id));
+  });
 
   if (!t.selectedClipIds.has(clipId)) return;
 
@@ -2205,6 +2212,48 @@ function handleTimelineKeydown(event) {
     event.preventDefault();
     deleteSelectedClips();
     return;
+  }
+  if (key === " " || key === "Spacebar") {
+    event.preventDefault();
+    toggleTimelinePreviewPlayback();
+    return;
+  }
+}
+
+function toggleTimelinePreviewPlayback() {
+  const t = state.timeline;
+  if (t.previewRafId) {
+    stopTimelinePreviewPlayback();
+  } else {
+    startTimelinePreviewPlayback();
+  }
+}
+
+function startTimelinePreviewPlayback() {
+  const t = state.timeline;
+  if (t.previewRafId) return;
+  if (t.playheadMs >= t.durationMs) t.playheadMs = 0;
+  t.previewStartWall = performance.now();
+  t.previewStartMs = t.playheadMs;
+  const tick = () => {
+    const elapsed = performance.now() - t.previewStartWall;
+    const ms = t.previewStartMs + elapsed;
+    if (ms >= t.durationMs) {
+      setPlayheadMs(t.durationMs);
+      stopTimelinePreviewPlayback();
+      return;
+    }
+    setPlayheadMs(ms);
+    t.previewRafId = requestAnimationFrame(tick);
+  };
+  t.previewRafId = requestAnimationFrame(tick);
+}
+
+function stopTimelinePreviewPlayback() {
+  const t = state.timeline;
+  if (t.previewRafId) {
+    cancelAnimationFrame(t.previewRafId);
+    t.previewRafId = null;
   }
 }
 
@@ -2461,8 +2510,10 @@ ui.timelineApplyLengthBtn.addEventListener("click", handleTimelineApplyLength);
 ui.timelineSaveBtn.addEventListener("click", () => {
   void saveTimeline({ manual: true });
 });
-ui.timelineColorR.addEventListener("click", () => applyColorToSelected([255, 0, 0]));
-ui.timelineColorG.addEventListener("click", () => applyColorToSelected([0, 255, 0]));
+// Hardware is GRB-ordered — base app's getModifierColor already pre-swaps.
+// Match that convention here so R button turns lights red physically.
+ui.timelineColorR.addEventListener("click", () => applyColorToSelected([0, 255, 0]));
+ui.timelineColorG.addEventListener("click", () => applyColorToSelected([255, 0, 0]));
 ui.timelineColorB.addEventListener("click", () => applyColorToSelected([0, 0, 255]));
 ui.timelineColorW.addEventListener("click", () => applyColorToSelected([255, 255, 255]));
 ui.timelineMinutesInput.addEventListener("change", handleTimelineApplyLength);
