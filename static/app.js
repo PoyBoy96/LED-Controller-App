@@ -1444,15 +1444,20 @@ async function startPlayback() {
     return;
   }
 
+  // Random preset no longer plays via the server — instead it generates
+  // a fresh randomized timeline locally and previews it inline.
+  if (selectedRecording.id === RANDOM_PLAYBACK_PRESET_ID) {
+    randomizeTimelineFromChaos();
+    focusTimelinePanel();
+    startTimelinePreviewPlayback();
+    return;
+  }
+
   try {
     const payload = {
       recording_id: state.selectedRecordingId,
       loop: ui.playbackLoopToggle.checked,
     };
-    if (selectedRecording.id === RANDOM_PLAYBACK_PRESET_ID) {
-      payload.random_options = normalizeRandomPlaybackOptions(state.randomPlaybackOptions);
-    }
-
     await api("/api/playback/start", {
       method: "POST",
       body: JSON.stringify(payload),
@@ -1461,6 +1466,79 @@ async function startPlayback() {
   } catch (error) {
     showError(error);
   }
+}
+
+function randomizeTimelineFromChaos() {
+  const t = state.timeline;
+  const layout = getViewLayout();
+  const leds = (layout?.leds || []).filter((l) => Number.isFinite(l.scene_x));
+  if (!leds.length) {
+    window.alert("Place some lights on the scene first.");
+    return;
+  }
+  const opts = normalizeRandomPlaybackOptions(state.randomPlaybackOptions);
+  const chaos = Math.max(1, Math.min(10, Number(opts.chaos) || 1));
+  const useRgb = !!opts.rgb;
+
+  // Chaos drives: total length, clip count per LED, duration jitter, color variety.
+  const durationMs = Math.max(2000, Math.round(4000 + chaos * 1500));
+  const clipsPerLed = Math.max(1, Math.round(1 + chaos * 0.9));
+  const minClipFrames = Math.max(1, 6 - Math.floor(chaos / 2));
+  const maxClipFrames = 6 + chaos * 4;
+  const palette = useRgb
+    ? [[0, 255, 0], [255, 0, 0], [0, 0, 255], [255, 255, 255], [255, 255, 0], [0, 255, 255], [255, 0, 255]]
+    : [[255, 255, 255]];
+
+  const newClips = [];
+  let nextId = 1;
+  for (const led of leds) {
+    for (let i = 0; i < clipsPerLed; i++) {
+      const lenFrames = Math.floor(minClipFrames + Math.random() * (maxClipFrames - minClipFrames + 1));
+      const lenMs = lenFrames * TIMELINE_MS_PER_FRAME;
+      const maxStart = Math.max(0, durationMs - lenMs);
+      const startMs = snapMsToFrame(Math.random() * maxStart);
+      const color = palette[Math.floor(Math.random() * palette.length)];
+      newClips.push({
+        id: nextId++,
+        ledId: led.physical_id,
+        startMs,
+        endMs: snapMsToFrame(startMs + lenMs),
+        color: [...color],
+      });
+    }
+  }
+  // Resolve overlaps per LED by sorting and pushing later clips after earlier ones.
+  const byLed = new Map();
+  for (const c of newClips) {
+    if (!byLed.has(c.ledId)) byLed.set(c.ledId, []);
+    byLed.get(c.ledId).push(c);
+  }
+  for (const list of byLed.values()) {
+    list.sort((a, b) => a.startMs - b.startMs);
+    for (let i = 1; i < list.length; i++) {
+      if (list[i].startMs < list[i - 1].endMs) {
+        const len = list[i].endMs - list[i].startMs;
+        list[i].startMs = list[i - 1].endMs;
+        list[i].endMs = Math.min(durationMs, list[i].startMs + len);
+      }
+    }
+  }
+
+  t.clips = newClips;
+  t.nextClipId = nextId;
+  t.durationMs = durationMs;
+  t.recordingName = `Random (chaos ${chaos})`;
+  t.isPresetSource = true;
+  t.loadedRecordingId = RANDOM_PLAYBACK_PRESET_ID;
+  t.derivedFromId = "";
+  t.selectedClipIds = new Set();
+  t.playheadMs = 0;
+  markTimelineDirty();
+  if (ui.timelineSourceLabel) ui.timelineSourceLabel.textContent = t.recordingName;
+  if (ui.timelineMinutesInput) ui.timelineMinutesInput.value = String(Math.floor(durationMs / 60000));
+  if (ui.timelineSecondsInput) ui.timelineSecondsInput.value = String(Math.floor((durationMs % 60000) / 1000));
+  if (ui.timelinePanel) ui.timelinePanel.hidden = false;
+  renderTimeline();
 }
 
 async function stopPlayback() {

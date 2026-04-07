@@ -66,41 +66,6 @@
         </div>
 
         <div class="control-card">
-          <div class="section-label">Playback</div>
-          <div class="field-row">
-            <div id="recordingPicker" class="dropdown">
-              <button id="recordingPickerBtn" class="dropdown-trigger" type="button" aria-expanded="false">
-                <span id="recordingPickerLabel">Select a recording</span>
-                <span class="dropdown-chevron" aria-hidden="true">▾</span>
-              </button>
-              <div id="recordingMenu" class="dropdown-menu"></div>
-            </div>
-            <label class="checkbox-row">
-              <input id="playbackLoopToggle" type="checkbox" />
-              Loop
-            </label>
-          </div>
-          <div id="randomPlaybackControls" class="playback-options" hidden>
-            <label class="range-field" for="randomChaosSlider">
-              <span>Chaos</span>
-              <strong id="randomChaosValue">1</strong>
-            </label>
-            <input id="randomChaosSlider" type="range" min="1" max="10" step="1" value="1" />
-            <label class="checkbox-row">
-              <input id="randomRgbToggle" type="checkbox" />
-              Random RGB
-            </label>
-            <div class="meta-row" id="randomPlaybackSummary">Random playback will flash one white light at a time.</div>
-          </div>
-          <div class="button-row">
-            <button id="playBtn" class="accent">Play</button>
-            <button id="stopPlaybackBtn">Stop</button>
-            <button id="deleteRecordingBtn">Delete</button>
-          </div>
-          <div class="meta-row" id="playbackSummary">Playback idle</div>
-        </div>
-
-        <div class="control-card">
           <div class="section-label">Scene</div>
           <div class="field-row">
             <input id="imageUploadInput" type="file" accept="image/png,image/jpeg" />
@@ -125,41 +90,68 @@
               <h2>Scene Canvas</h2>
               <p>Drag lights here in edit mode. Click lights here in live mode.</p>
             </div>
-            <div class="scene-key">
-              <span class="key-chip">Placed</span>
-              <span class="key-chip active-chip">Active</span>
-            </div>
-          </div>
-
-          <div id="sceneStage" class="scene-stage">
-            <div id="scenePlaceholder" class="scene-placeholder">
-              Drop a PNG or JPEG here, or choose a file above, then drag LEDs into position.
-            </div>
-            <img id="sceneImage" class="scene-image" alt="Scene background" />
-            <div id="sceneOverlay" class="scene-overlay"></div>
-          </div>
-
-          <div class="scene-footer-controls">
-            <div class="section-label">Lighting</div>
-            <div class="lighting-stack">
-              <label class="range-field" for="brightnessSlider">
-                <span>Master Brightness</span>
-                <strong id="brightnessValue">100%</strong>
-              </label>
-              <input id="brightnessSlider" type="range" min="0" max="100" step="1" value="100" />
+            <div class="scene-header-chips">
+              <div class="scene-key">
+                <span class="key-chip">Placed</span>
+                <span class="key-chip active-chip">Active</span>
+              </div>
               <div class="modifier-key">
-                <span class="modifier-chip modifier-white">No modifier = White</span>
+                <span class="modifier-chip modifier-white">No mod = White</span>
                 <span class="modifier-chip modifier-red">Shift = Red</span>
                 <span class="modifier-chip modifier-green">Ctrl = Green</span>
                 <span class="modifier-chip modifier-blue">Alt = Blue</span>
               </div>
             </div>
-            <div class="meta-row" id="lightingSummary">Brightness applies to every active LED.</div>
           </div>
+
+          <div class="scene-canvas-row">
+            <div id="sceneStage" class="scene-stage">
+              <div id="scenePlaceholder" class="scene-placeholder">
+                Drop a PNG or JPEG here, or choose a file above, then drag LEDs into position.
+              </div>
+              <img id="sceneImage" class="scene-image" alt="Scene background" />
+              <div id="sceneOverlay" class="scene-overlay"></div>
+            </div>
+            <div class="scene-brightness-column">
+              <strong id="brightnessValue">100%</strong>
+              <input id="brightnessSlider" class="vertical-slider" type="range" min="0" max="100" step="1" value="100" orient="vertical" />
+              <span class="brightness-label">Brightness</span>
+            </div>
+          </div>
+          <div class="meta-row" id="lightingSummary">Brightness applies to every active LED.</div>
         </section>
       </main>
 
-      <section class="timeline-panel" id="timelinePanel" tabindex="0" hidden>
+      <section class="timeline-panel" id="timelinePanel" tabindex="0">
+        <div class="timeline-playback-bar">
+          <div id="recordingPicker" class="dropdown">
+            <button id="recordingPickerBtn" class="dropdown-trigger" type="button" aria-expanded="false">
+              <span id="recordingPickerLabel">Select a recording</span>
+              <span class="dropdown-chevron" aria-hidden="true">▾</span>
+            </button>
+            <div id="recordingMenu" class="dropdown-menu"></div>
+          </div>
+          <button id="playBtn" class="accent" type="button">Play</button>
+          <button id="stopPlaybackBtn" type="button">Stop</button>
+          <button id="deleteRecordingBtn" type="button">Delete</button>
+          <label class="checkbox-row">
+            <input id="playbackLoopToggle" type="checkbox" />
+            Loop
+          </label>
+          <div id="randomPlaybackControls" class="timeline-random-controls" hidden>
+            <label class="range-field" for="randomChaosSlider">
+              <span>Chaos</span>
+              <strong id="randomChaosValue">1</strong>
+            </label>
+            <input id="randomChaosSlider" type="range" min="1" max="10" step="1" value="1" />
+            <label class="checkbox-row">
+              <input id="randomRgbToggle" type="checkbox" />
+              Random RGB
+            </label>
+          </div>
+          <div class="meta-row" id="playbackSummary">Playback idle</div>
+          <div class="meta-row" id="randomPlaybackSummary" hidden>Play randomizes timeline.</div>
+        </div>
         <div class="timeline-header">
           <div class="timeline-title">
             <h2>Timeline</h2>
