@@ -3,7 +3,8 @@
     "allow": [
       "Bash(node --check \"e:/Github/LED Controller App/static/app.js\")",
       "Bash(python -c \"import re,sys; src=open\\(r'e:/Github/LED Controller App/static/app.js'\\).read\\(\\); print\\('lines',src.count\\('\\\\n'\\)\\); print\\('open_braces',src.count\\('{'\\)\\); print\\('close_braces',src.count\\('}'\\)\\); print\\('open_parens',src.count\\('\\('\\)\\); print\\('close_parens',src.count\\('\\)'\\)\\)\")",
-      "Bash(python -c \"src=open\\(r'e:/Github/LED Controller App/static/app.js', encoding='utf-8'\\).read\\(\\); print\\('lines',src.count\\(chr\\(10\\)\\)\\); print\\('braces',src.count\\('{'\\),src.count\\('}'\\)\\); print\\('parens',src.count\\('\\('\\),src.count\\('\\)'\\)\\); print\\('brackets',src.count\\('['\\),src.count\\(']'\\)\\)\")"
+      "Bash(python -c \"src=open\\(r'e:/Github/LED Controller App/static/app.js', encoding='utf-8'\\).read\\(\\); print\\('lines',src.count\\(chr\\(10\\)\\)\\); print\\('braces',src.count\\('{'\\),src.count\\('}'\\)\\); print\\('parens',src.count\\('\\('\\),src.count\\('\\)'\\)\\); print\\('brackets',src.count\\('['\\),src.count\\(']'\\)\\)\")",
+      "Bash(python -c ':*)"
     ]
   }
 }

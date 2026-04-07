@@ -158,6 +158,63 @@
           </div>
         </section>
       </main>
+
+      <section class="timeline-panel" id="timelinePanel" tabindex="0" hidden>
+        <div class="timeline-header">
+          <div class="timeline-title">
+            <h2>Timeline</h2>
+            <p id="timelineSourceLabel">Select a recording to load the timeline.</p>
+          </div>
+          <div class="timeline-toolbar">
+            <div class="timeline-time-display">
+              <strong id="timelineTimeDisplay">0:00.000</strong>
+              <span class="timeline-frame-display" id="timelineFrameDisplay">f0</span>
+            </div>
+            <label class="compact-field" for="timelineMinutesInput">
+              <span>min</span>
+              <input id="timelineMinutesInput" type="number" min="0" max="60" step="1" value="0" />
+            </label>
+            <label class="compact-field" for="timelineSecondsInput">
+              <span>sec</span>
+              <input id="timelineSecondsInput" type="number" min="0" max="59" step="1" value="0" />
+            </label>
+            <button id="timelineApplyLengthBtn" type="button">Set length</button>
+            <button id="timelineSaveBtn" type="button" class="accent">Save</button>
+            <span class="timeline-save-status" id="timelineSaveStatus" aria-live="polite"></span>
+          </div>
+        </div>
+
+        <div class="timeline-color-bar">
+          <div class="timeline-color-buttons">
+            <button id="timelineColorR" class="timeline-color-btn timeline-color-r" type="button" title="Set selected to Red">R</button>
+            <button id="timelineColorG" class="timeline-color-btn timeline-color-g" type="button" title="Set selected to Green">G</button>
+            <button id="timelineColorB" class="timeline-color-btn timeline-color-b" type="button" title="Set selected to Blue">B</button>
+            <button id="timelineColorW" class="timeline-color-btn timeline-color-w" type="button" title="Set selected to White">W</button>
+          </div>
+          <div class="timeline-zoom-stack">
+            <label class="range-field" for="timelineZoomSlider">
+              <span>Zoom</span>
+              <strong id="timelineZoomValue">1.0×</strong>
+            </label>
+            <input id="timelineZoomSlider" type="range" min="0" max="100" step="1" value="40" />
+          </div>
+          <div class="timeline-shortcut-hint" id="timelineShortcutHint">
+            Click timeline to focus. + / - zoom. ← → step frame. ↑ ↓ select row. B split. Del remove. Ctrl+S save.
+          </div>
+        </div>
+
+        <div class="timeline-body" id="timelineBody">
+          <div class="timeline-content" id="timelineContent">
+            <div class="timeline-ruler-row">
+              <div class="timeline-corner"></div>
+              <div class="timeline-ruler" id="timelineRuler"></div>
+            </div>
+            <div class="timeline-rows" id="timelineRows"></div>
+            <div class="timeline-playhead" id="timelinePlayhead"></div>
+            <div class="timeline-marquee" id="timelineMarquee" hidden></div>
+          </div>
+        </div>
+      </section>
     </div>
 
     <script src="/static/app.js"></script>

@@ -102,6 +102,14 @@ def all_off():
     return jsonify(service.all_off(source=source))
 
 
+@app.post("/api/lights/state")
+def set_lights_state():
+    payload = request.get_json(force=True, silent=False) or {}
+    lights = payload.get("lights", [])
+    source = payload.get("source", "scrub")
+    return jsonify(service.set_lights_bulk(lights, source=source))
+
+
 @app.post("/api/keys/trigger")
 def trigger_key():
     payload = request.get_json(force=True, silent=False) or {}
@@ -145,6 +153,17 @@ def get_recording(recording_id: str):
 @app.delete("/api/recordings/<recording_id>")
 def delete_recording(recording_id: str):
     return jsonify(service.delete_recording(recording_id))
+
+
+@app.post("/api/recordings/<recording_id>/duplicate")
+def duplicate_recording(recording_id: str):
+    return jsonify(service.duplicate_recording(recording_id))
+
+
+@app.put("/api/recordings/<recording_id>")
+def update_recording(recording_id: str):
+    payload = request.get_json(force=True, silent=False) or {}
+    return jsonify(service.update_recording(recording_id, payload))
 
 
 @app.post("/api/playback/start")

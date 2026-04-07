@@ -43,6 +43,27 @@ const ui = {
   driverMode: document.getElementById("driverMode"),
   driverDetail: document.getElementById("driverDetail"),
   driverDot: document.getElementById("driverDot"),
+  timelinePanel: document.getElementById("timelinePanel"),
+  timelineSourceLabel: document.getElementById("timelineSourceLabel"),
+  timelineTimeDisplay: document.getElementById("timelineTimeDisplay"),
+  timelineFrameDisplay: document.getElementById("timelineFrameDisplay"),
+  timelineMinutesInput: document.getElementById("timelineMinutesInput"),
+  timelineSecondsInput: document.getElementById("timelineSecondsInput"),
+  timelineApplyLengthBtn: document.getElementById("timelineApplyLengthBtn"),
+  timelineSaveBtn: document.getElementById("timelineSaveBtn"),
+  timelineSaveStatus: document.getElementById("timelineSaveStatus"),
+  timelineColorR: document.getElementById("timelineColorR"),
+  timelineColorG: document.getElementById("timelineColorG"),
+  timelineColorB: document.getElementById("timelineColorB"),
+  timelineColorW: document.getElementById("timelineColorW"),
+  timelineZoomSlider: document.getElementById("timelineZoomSlider"),
+  timelineZoomValue: document.getElementById("timelineZoomValue"),
+  timelineBody: document.getElementById("timelineBody"),
+  timelineContent: document.getElementById("timelineContent"),
+  timelineRuler: document.getElementById("timelineRuler"),
+  timelineRows: document.getElementById("timelineRows"),
+  timelinePlayhead: document.getElementById("timelinePlayhead"),
+  timelineMarquee: document.getElementById("timelineMarquee"),
 };
 
 const state = {
@@ -73,6 +94,33 @@ const state = {
     chaos: 1,
     rgb: false,
   },
+  timeline: {
+    loadedRecordingId: "",
+    recordingName: "",
+    isPresetSource: false,
+    derivedFromId: "",
+    durationMs: 0,
+    clips: [],
+    nextClipId: 1,
+    selectedClipIds: new Set(),
+    selectedRowId: 0,
+    playheadMs: 0,
+    zoom: 1,
+    pxPerMs: 0.6,
+    panelFocused: false,
+    dirty: false,
+    saving: false,
+    autoSaveTimer: null,
+    saveStatusTimer: null,
+    drag: null,
+    marquee: null,
+    scrubRafId: null,
+    scrubInFlight: false,
+    pendingScrubLights: null,
+    statusMessage: "",
+    statusTone: "",
+  },
+  scrubOverride: null,
 };
 
 const IMAGE_UPLOAD_ERROR = "Only PNG and JPEG images are supported.";
@@ -179,14 +227,23 @@ function selectRecording(recordingId, { closeMenu = true, applyDefaults = true }
   if (closeMenu) {
     closeRecordingMenu();
   }
+  if (!state.timeline.dirty) {
+    void timelineLoadFromRecordingId(recordingId);
+  }
   render();
 }
 
 function getActiveLedIds() {
+  if (state.scrubOverride) {
+    return state.scrubOverride.activeLeds;
+  }
   return Array.isArray(state.server?.active_leds) ? state.server.active_leds : [];
 }
 
 function getActiveLedColorMap() {
+  if (state.scrubOverride) {
+    return state.scrubOverride.colors;
+  }
   if (!state.server?.active_led_colors || typeof state.server.active_led_colors !== "object") {
     return {};
   }
@@ -1456,6 +1513,779 @@ async function allOff() {
   }
 }
 
+// ============================================================
+// Timeline editor
+// ============================================================
+
+const TIMELINE_FPS = 30;
+const TIMELINE_MS_PER_FRAME = 1000 / TIMELINE_FPS;
+const TIMELINE_MIN_PX_PER_MS = 0.02;
+const TIMELINE_MAX_PX_PER_MS = 1.5;
+const TIMELINE_LABEL_WIDTH_PX = 140;
+
+function timelineZoomSliderToPxPerMs(sliderValue) {
+  const t = Math.max(0, Math.min(100, Number(sliderValue) || 0)) / 100;
+  const logMin = Math.log(TIMELINE_MIN_PX_PER_MS);
+  const logMax = Math.log(TIMELINE_MAX_PX_PER_MS);
+  return Math.exp(logMin + (logMax - logMin) * t);
+}
+
+function timelinePxPerMsToSlider(pxPerMs) {
+  const logMin = Math.log(TIMELINE_MIN_PX_PER_MS);
+  const logMax = Math.log(TIMELINE_MAX_PX_PER_MS);
+  const t = (Math.log(pxPerMs) - logMin) / (logMax - logMin);
+  return Math.round(Math.max(0, Math.min(1, t)) * 100);
+}
+
+function snapMsToFrame(ms) {
+  return Math.round(ms / TIMELINE_MS_PER_FRAME) * TIMELINE_MS_PER_FRAME;
+}
+
+function tlMsToPx(ms) {
+  return ms * state.timeline.pxPerMs;
+}
+
+function tlPxToMs(px) {
+  return px / state.timeline.pxPerMs;
+}
+
+function formatTimelineTime(ms) {
+  const total = Math.max(0, Math.round(ms));
+  const mins = Math.floor(total / 60000);
+  const secs = Math.floor((total % 60000) / 1000);
+  const rem = total % 1000;
+  return `${mins}:${String(secs).padStart(2, "0")}.${String(rem).padStart(3, "0")}`;
+}
+
+function formatTimelineFrame(ms) {
+  return `f${Math.round(ms / TIMELINE_MS_PER_FRAME)}`;
+}
+
+function eventsToClips(events) {
+  const byLed = new Map();
+  for (const ev of events || []) {
+    const pid = Number(ev.physical_id);
+    if (!pid) continue;
+    if (!byLed.has(pid)) byLed.set(pid, []);
+    byLed.get(pid).push(ev);
+  }
+  const clips = [];
+  for (const [ledId, list] of byLed) {
+    list.sort((a, b) => a.timestamp_ms - b.timestamp_ms);
+    let open = null;
+    for (const ev of list) {
+      if (ev.action === "on") {
+        if (open) {
+          clips.push({
+            id: state.timeline.nextClipId++,
+            ledId,
+            startMs: open.start,
+            endMs: ev.timestamp_ms,
+            color: open.color,
+          });
+        }
+        open = {
+          start: ev.timestamp_ms,
+          color: Array.isArray(ev.color) ? [...ev.color] : [255, 255, 255],
+        };
+      } else if (ev.action === "off" && open) {
+        clips.push({
+          id: state.timeline.nextClipId++,
+          ledId,
+          startMs: open.start,
+          endMs: ev.timestamp_ms,
+          color: open.color,
+        });
+        open = null;
+      }
+    }
+    if (open) {
+      clips.push({
+        id: state.timeline.nextClipId++,
+        ledId,
+        startMs: open.start,
+        endMs: Math.max(open.start + TIMELINE_MS_PER_FRAME, state.timeline.durationMs),
+        color: open.color,
+      });
+    }
+  }
+  return clips;
+}
+
+function clipsToEvents(clips, layout) {
+  const lookup = new Map();
+  if (layout?.leds) {
+    for (const led of layout.leds) lookup.set(led.physical_id, led);
+  }
+  const events = [];
+  for (const clip of clips) {
+    const led = lookup.get(clip.ledId);
+    const name = led?.display_name || `LED ${clip.ledId}`;
+    events.push({
+      timestamp_ms: Math.round(clip.startMs * 1000) / 1000,
+      trigger_type: "edit",
+      physical_id: clip.ledId,
+      display_name_snapshot: name,
+      action: "on",
+      active: true,
+      color: [...clip.color],
+    });
+    events.push({
+      timestamp_ms: Math.round(clip.endMs * 1000) / 1000,
+      trigger_type: "edit",
+      physical_id: clip.ledId,
+      display_name_snapshot: name,
+      action: "off",
+      active: false,
+    });
+  }
+  events.sort((a, b) => a.timestamp_ms - b.timestamp_ms || a.physical_id - b.physical_id);
+  return events;
+}
+
+async function timelineLoadFromRecordingId(recordingId) {
+  if (!recordingId) {
+    resetTimelineData();
+    renderTimeline();
+    return;
+  }
+  try {
+    const recording = await api(`/api/recordings/${recordingId}`);
+    loadTimelineFromRecording(recording);
+  } catch (error) {
+    showError(error);
+  }
+}
+
+function loadTimelineFromRecording(recording) {
+  const t = state.timeline;
+  t.loadedRecordingId = recording.id;
+  t.recordingName = recording.name || "";
+  t.isPresetSource = Boolean(recording.is_preset);
+  t.derivedFromId = recording.derived_from || "";
+  t.durationMs = Math.max(0, Number(recording.duration_ms) || 0);
+  t.nextClipId = 1;
+  t.clips = eventsToClips(recording.events || []);
+  t.selectedClipIds = new Set();
+  t.selectedRowId = 0;
+  t.playheadMs = 0;
+  t.dirty = false;
+  setTimelineStatus("", "");
+  updateTimelineLengthInputs();
+  renderTimeline();
+}
+
+function resetTimelineData() {
+  const t = state.timeline;
+  t.loadedRecordingId = "";
+  t.recordingName = "";
+  t.isPresetSource = false;
+  t.derivedFromId = "";
+  t.durationMs = 0;
+  t.clips = [];
+  t.selectedClipIds = new Set();
+  t.selectedRowId = 0;
+  t.playheadMs = 0;
+  t.dirty = false;
+}
+
+function updateTimelineLengthInputs() {
+  const totalSec = Math.floor(state.timeline.durationMs / 1000);
+  ui.timelineMinutesInput.value = String(Math.floor(totalSec / 60));
+  ui.timelineSecondsInput.value = String(totalSec % 60);
+}
+
+function getTimelineLedRows() {
+  const layout = getViewLayout();
+  if (!layout) return [];
+  return layout.leds.slice().sort((a, b) => a.physical_id - b.physical_id);
+}
+
+function setTimelineStatus(message, tone = "") {
+  state.timeline.statusMessage = message;
+  state.timeline.statusTone = tone;
+  if (!ui.timelineSaveStatus) return;
+  ui.timelineSaveStatus.textContent = message;
+  ui.timelineSaveStatus.classList.remove("success", "error");
+  if (tone) ui.timelineSaveStatus.classList.add(tone);
+  if (state.timeline.saveStatusTimer) {
+    clearTimeout(state.timeline.saveStatusTimer);
+    state.timeline.saveStatusTimer = null;
+  }
+  if (message && tone === "success") {
+    state.timeline.saveStatusTimer = window.setTimeout(() => {
+      ui.timelineSaveStatus.textContent = "";
+      ui.timelineSaveStatus.classList.remove("success", "error");
+    }, 2500);
+  }
+}
+
+function renderTimeline() {
+  const t = state.timeline;
+  const panel = ui.timelinePanel;
+  if (!panel) return;
+  panel.hidden = false;
+
+  const hasRecording = Boolean(t.loadedRecordingId);
+  if (!hasRecording) {
+    ui.timelineSourceLabel.textContent = "Select a recording to load the timeline.";
+    ui.timelineRuler.innerHTML = "";
+    ui.timelineRows.innerHTML = "";
+    ui.timelinePlayhead.style.display = "none";
+    ui.timelineSaveBtn.disabled = true;
+    return;
+  }
+
+  ui.timelinePlayhead.style.display = "";
+  let suffix = "";
+  if (t.isPresetSource) suffix = " · preset (first edit will save a copy)";
+  else if (t.derivedFromId) suffix = " · edit copy";
+  ui.timelineSourceLabel.textContent = `${t.recordingName}${suffix}`;
+  ui.timelineSaveBtn.disabled = !t.dirty || t.saving;
+
+  const trackWidthPx = Math.max(400, tlMsToPx(Math.max(1, t.durationMs)));
+  const frameWidthPx = tlMsToPx(TIMELINE_MS_PER_FRAME);
+  const secondWidthPx = tlMsToPx(1000);
+  ui.timelinePanel.style.setProperty("--timeline-track-width", `${trackWidthPx}px`);
+  ui.timelinePanel.style.setProperty("--timeline-frame-width", `${frameWidthPx}px`);
+  ui.timelinePanel.style.setProperty("--timeline-second-width", `${secondWidthPx}px`);
+
+  renderTimelineRuler(secondWidthPx);
+  renderTimelineRows();
+  updateTimelinePlayhead();
+  updateTimelineTimeDisplay();
+
+  ui.timelineZoomValue.textContent = `${t.pxPerMs.toFixed(2)} px/ms`;
+}
+
+function renderTimelineRuler(secondWidthPx) {
+  const ruler = ui.timelineRuler;
+  ruler.innerHTML = "";
+  const totalSec = Math.max(1, Math.ceil(state.timeline.durationMs / 1000));
+  const minSpacingPx = 60;
+  let step = 1;
+  while (secondWidthPx * step < minSpacingPx && step < 3600) step *= 2;
+  for (let s = 0; s <= totalSec; s += step) {
+    const tick = document.createElement("div");
+    tick.className = "timeline-ruler-tick";
+    tick.style.left = `${tlMsToPx(s * 1000)}px`;
+    const mins = Math.floor(s / 60);
+    const secs = s % 60;
+    tick.textContent = `${mins}:${String(secs).padStart(2, "0")}`;
+    ruler.appendChild(tick);
+  }
+  ruler.addEventListener("pointerdown", handleRulerPointerDown);
+}
+
+function renderTimelineRows() {
+  const rowsEl = ui.timelineRows;
+  rowsEl.innerHTML = "";
+  const leds = getTimelineLedRows();
+  const clipsByLed = new Map();
+  for (const c of state.timeline.clips) {
+    if (!clipsByLed.has(c.ledId)) clipsByLed.set(c.ledId, []);
+    clipsByLed.get(c.ledId).push(c);
+  }
+
+  for (const led of leds) {
+    const row = document.createElement("div");
+    row.className = `timeline-row${state.timeline.selectedRowId === led.physical_id ? " row-selected" : ""}`;
+    row.dataset.ledId = String(led.physical_id);
+
+    const label = document.createElement("div");
+    label.className = "timeline-row-label";
+    label.textContent = led.display_name
+      ? `${led.physical_id}: ${led.display_name}`
+      : `LED ${led.physical_id}`;
+    row.appendChild(label);
+
+    const track = document.createElement("div");
+    track.className = "timeline-row-track";
+    track.dataset.ledId = String(led.physical_id);
+    track.addEventListener("pointerdown", handleTrackPointerDown);
+
+    const clips = clipsByLed.get(led.physical_id) || [];
+    for (const clip of clips) {
+      track.appendChild(createClipElement(clip));
+    }
+    row.appendChild(track);
+    rowsEl.appendChild(row);
+  }
+}
+
+function createClipElement(clip) {
+  const el = document.createElement("div");
+  el.className = `timeline-clip${state.timeline.selectedClipIds.has(clip.id) ? " selected" : ""}`;
+  el.dataset.clipId = String(clip.id);
+  const left = tlMsToPx(clip.startMs);
+  const width = Math.max(3, tlMsToPx(clip.endMs - clip.startMs));
+  el.style.left = `${left}px`;
+  el.style.width = `${width}px`;
+  const [r, g, b] = clip.color;
+  el.style.background = `rgb(${r}, ${g}, ${b})`;
+  const luminance = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  el.style.color = luminance > 0.55 ? "rgba(0,0,0,0.8)" : "rgba(255,255,255,0.92)";
+
+  const leftHandle = document.createElement("div");
+  leftHandle.className = "timeline-clip-handle left";
+  leftHandle.dataset.mode = "trim-start";
+  el.appendChild(leftHandle);
+
+  const rightHandle = document.createElement("div");
+  rightHandle.className = "timeline-clip-handle right";
+  rightHandle.dataset.mode = "trim-end";
+  el.appendChild(rightHandle);
+
+  if (width > 50) {
+    const lbl = document.createElement("span");
+    lbl.className = "timeline-clip-label";
+    lbl.textContent = `${Math.round(clip.endMs - clip.startMs)}ms`;
+    el.appendChild(lbl);
+  }
+
+  el.addEventListener("pointerdown", handleClipPointerDown);
+  return el;
+}
+
+function updateTimelinePlayhead() {
+  const left = tlMsToPx(state.timeline.playheadMs) + TIMELINE_LABEL_WIDTH_PX;
+  ui.timelinePlayhead.style.left = `${left}px`;
+}
+
+function updateTimelineTimeDisplay() {
+  ui.timelineTimeDisplay.textContent = formatTimelineTime(state.timeline.playheadMs);
+  ui.timelineFrameDisplay.textContent = formatTimelineFrame(state.timeline.playheadMs);
+}
+
+function updateTimelineClipPositionsOnly() {
+  for (const clip of state.timeline.clips) {
+    const el = ui.timelineRows.querySelector(`.timeline-clip[data-clip-id="${clip.id}"]`);
+    if (!el) continue;
+    el.style.left = `${tlMsToPx(clip.startMs)}px`;
+    el.style.width = `${Math.max(3, tlMsToPx(clip.endMs - clip.startMs))}px`;
+  }
+}
+
+function computeActiveLightsAtMs(ms) {
+  const out = [];
+  for (const clip of state.timeline.clips) {
+    if (ms >= clip.startMs && ms < clip.endMs) {
+      out.push({ physical_id: clip.ledId, color: [...clip.color] });
+    }
+  }
+  return out;
+}
+
+function applyScrubOverrideFromMs(ms) {
+  const lights = computeActiveLightsAtMs(ms);
+  const ids = lights.map((l) => l.physical_id).sort((a, b) => a - b);
+  const colors = {};
+  for (const l of lights) colors[l.physical_id] = [...l.color];
+  state.scrubOverride = { activeLeds: ids, colors };
+  const layout = getViewLayout();
+  if (layout) {
+    renderScene(layout, new Set(ids));
+    renderSidebar(layout, new Set(ids));
+  }
+  pushScrubToServer(lights);
+}
+
+async function pushScrubToServer(lights) {
+  state.timeline.pendingScrubLights = lights;
+  if (state.timeline.scrubInFlight) return;
+  state.timeline.scrubInFlight = true;
+  try {
+    while (state.timeline.pendingScrubLights) {
+      const payload = state.timeline.pendingScrubLights;
+      state.timeline.pendingScrubLights = null;
+      await api("/api/lights/state", {
+        method: "POST",
+        body: JSON.stringify({ lights: payload, source: "scrub" }),
+      });
+    }
+  } catch (error) {
+    // Silent — scrub is best-effort.
+  } finally {
+    state.timeline.scrubInFlight = false;
+  }
+}
+
+function clearScrubOverride() {
+  if (state.scrubOverride) {
+    state.scrubOverride = null;
+    if (state.server) render();
+  }
+}
+
+function setPlayheadMs(ms) {
+  const clamped = Math.max(0, Math.min(state.timeline.durationMs, ms));
+  state.timeline.playheadMs = clamped;
+  updateTimelinePlayhead();
+  updateTimelineTimeDisplay();
+  applyScrubOverrideFromMs(clamped);
+}
+
+function handleRulerPointerDown(event) {
+  if (event.button !== undefined && event.button !== 0) return;
+  focusTimelinePanel();
+  beginScrub(event);
+}
+
+function handleTrackPointerDown(event) {
+  if (event.target.closest(".timeline-clip")) return;
+  if (event.button !== undefined && event.button !== 0) return;
+  focusTimelinePanel();
+
+  const track = event.currentTarget;
+  const ledId = Number(track.dataset.ledId);
+  state.timeline.selectedRowId = ledId;
+
+  if (!event.shiftKey && !event.ctrlKey && !event.metaKey) {
+    state.timeline.selectedClipIds.clear();
+  }
+  renderTimeline();
+  beginScrub(event);
+}
+
+function beginScrub(initialEvent) {
+  const body = ui.timelineBody;
+  try {
+    body.setPointerCapture(initialEvent.pointerId);
+  } catch (error) {
+    // ignore
+  }
+
+  const updateFromClientX = (clientX) => {
+    const bodyRect = body.getBoundingClientRect();
+    const x = clientX - bodyRect.left + body.scrollLeft - TIMELINE_LABEL_WIDTH_PX;
+    setPlayheadMs(tlPxToMs(x));
+  };
+  updateFromClientX(initialEvent.clientX);
+
+  const onMove = (e) => {
+    if (state.timeline.scrubRafId) cancelAnimationFrame(state.timeline.scrubRafId);
+    const clientX = e.clientX;
+    state.timeline.scrubRafId = requestAnimationFrame(() => {
+      state.timeline.scrubRafId = null;
+      updateFromClientX(clientX);
+    });
+  };
+  const onUp = () => {
+    body.removeEventListener("pointermove", onMove);
+    body.removeEventListener("pointerup", onUp);
+    body.removeEventListener("lostpointercapture", onUp);
+    if (state.timeline.scrubRafId) {
+      cancelAnimationFrame(state.timeline.scrubRafId);
+      state.timeline.scrubRafId = null;
+    }
+  };
+  body.addEventListener("pointermove", onMove);
+  body.addEventListener("pointerup", onUp, { once: true });
+  body.addEventListener("lostpointercapture", onUp, { once: true });
+}
+
+function handleClipPointerDown(event) {
+  if (event.button !== undefined && event.button !== 0) return;
+  event.stopPropagation();
+  focusTimelinePanel();
+
+  const clipEl = event.currentTarget;
+  const clipId = Number(clipEl.dataset.clipId);
+  const clip = state.timeline.clips.find((c) => c.id === clipId);
+  if (!clip) return;
+
+  const handleEl = event.target.closest(".timeline-clip-handle");
+  const mode = handleEl ? handleEl.dataset.mode : "move";
+
+  const t = state.timeline;
+  if (event.shiftKey || event.ctrlKey || event.metaKey) {
+    if (t.selectedClipIds.has(clipId)) {
+      t.selectedClipIds.delete(clipId);
+    } else {
+      t.selectedClipIds.add(clipId);
+    }
+  } else if (!t.selectedClipIds.has(clipId)) {
+    t.selectedClipIds = new Set([clipId]);
+  }
+  t.selectedRowId = clip.ledId;
+  renderTimeline();
+
+  if (!t.selectedClipIds.has(clipId)) return;
+
+  try {
+    clipEl.setPointerCapture(event.pointerId);
+  } catch (error) {
+    // ignore
+  }
+
+  const startClientX = event.clientX;
+  const startSnapshot = new Map();
+  for (const id of t.selectedClipIds) {
+    const c = t.clips.find((x) => x.id === id);
+    if (c) startSnapshot.set(id, { startMs: c.startMs, endMs: c.endMs });
+  }
+
+  const onMove = (e) => {
+    const deltaPx = e.clientX - startClientX;
+    const deltaMs = tlPxToMs(deltaPx);
+    applyDragToSelection(mode, startSnapshot, deltaMs);
+    updateTimelineClipPositionsOnly();
+  };
+  const onUp = () => {
+    clipEl.removeEventListener("pointermove", onMove);
+    clipEl.removeEventListener("pointerup", onUp);
+    clipEl.removeEventListener("lostpointercapture", onUp);
+    markTimelineDirty();
+    renderTimeline();
+  };
+  clipEl.addEventListener("pointermove", onMove);
+  clipEl.addEventListener("pointerup", onUp, { once: true });
+  clipEl.addEventListener("lostpointercapture", onUp, { once: true });
+}
+
+function applyDragToSelection(mode, startSnapshot, deltaMs) {
+  const t = state.timeline;
+  const frame = TIMELINE_MS_PER_FRAME;
+  for (const [id, orig] of startSnapshot) {
+    const clip = t.clips.find((c) => c.id === id);
+    if (!clip) continue;
+
+    const neighbors = t.clips.filter((c) => c.ledId === clip.ledId && !startSnapshot.has(c.id));
+    let minStart = 0;
+    let maxEnd = t.durationMs;
+    for (const n of neighbors) {
+      if (n.endMs <= orig.startMs && n.endMs > minStart) minStart = n.endMs;
+      if (n.startMs >= orig.endMs && n.startMs < maxEnd) maxEnd = n.startMs;
+    }
+
+    if (mode === "move") {
+      const len = orig.endMs - orig.startMs;
+      let newStart = orig.startMs + deltaMs;
+      newStart = Math.max(minStart, Math.min(maxEnd - len, newStart));
+      newStart = snapMsToFrame(newStart);
+      clip.startMs = newStart;
+      clip.endMs = newStart + len;
+    } else if (mode === "trim-start") {
+      let newStart = orig.startMs + deltaMs;
+      newStart = Math.max(minStart, Math.min(orig.endMs - frame, newStart));
+      clip.startMs = snapMsToFrame(newStart);
+      if (clip.endMs - clip.startMs < frame) clip.startMs = clip.endMs - frame;
+    } else if (mode === "trim-end") {
+      let newEnd = orig.endMs + deltaMs;
+      newEnd = Math.max(orig.startMs + frame, Math.min(maxEnd, newEnd));
+      clip.endMs = snapMsToFrame(newEnd);
+      if (clip.endMs - clip.startMs < frame) clip.endMs = clip.startMs + frame;
+    }
+  }
+}
+
+function markTimelineDirty() {
+  state.timeline.dirty = true;
+  setTimelineStatus("Unsaved changes", "");
+  if (ui.timelineSaveBtn) ui.timelineSaveBtn.disabled = false;
+}
+
+function applyColorToSelected(color) {
+  const t = state.timeline;
+  if (!t.selectedClipIds.size) return;
+  for (const clip of t.clips) {
+    if (t.selectedClipIds.has(clip.id)) clip.color = [...color];
+  }
+  markTimelineDirty();
+  renderTimeline();
+}
+
+function splitSelectedClipsAtPlayhead() {
+  const t = state.timeline;
+  const playhead = snapMsToFrame(t.playheadMs);
+  const newClips = [];
+  const newSelection = new Set();
+  let didSplit = false;
+  for (const clip of t.clips) {
+    const selected = t.selectedClipIds.has(clip.id);
+    if (selected && playhead > clip.startMs + 0.5 && playhead < clip.endMs - 0.5) {
+      const left = {
+        id: t.nextClipId++,
+        ledId: clip.ledId,
+        startMs: clip.startMs,
+        endMs: playhead,
+        color: [...clip.color],
+      };
+      const right = {
+        id: t.nextClipId++,
+        ledId: clip.ledId,
+        startMs: playhead,
+        endMs: clip.endMs,
+        color: [...clip.color],
+      };
+      newClips.push(left, right);
+      newSelection.add(left.id);
+      newSelection.add(right.id);
+      didSplit = true;
+    } else {
+      newClips.push(clip);
+      if (selected) newSelection.add(clip.id);
+    }
+  }
+  if (didSplit) {
+    t.clips = newClips;
+    t.selectedClipIds = newSelection;
+    markTimelineDirty();
+    renderTimeline();
+  }
+}
+
+function deleteSelectedClips() {
+  const t = state.timeline;
+  if (!t.selectedClipIds.size) return;
+  t.clips = t.clips.filter((c) => !t.selectedClipIds.has(c.id));
+  t.selectedClipIds.clear();
+  markTimelineDirty();
+  renderTimeline();
+}
+
+function adjustTimelineZoom(delta) {
+  const next = Math.max(0, Math.min(100, Number(ui.timelineZoomSlider.value) + delta));
+  ui.timelineZoomSlider.value = String(next);
+  state.timeline.pxPerMs = timelineZoomSliderToPxPerMs(next);
+  renderTimeline();
+}
+
+function handleTimelineKeydown(event) {
+  if (!state.timeline.panelFocused) return;
+  const target = event.target;
+  const tag = target?.tagName?.toLowerCase();
+  if (tag === "input" || tag === "textarea" || tag === "select") return;
+
+  const key = event.key;
+  const ctrl = event.ctrlKey || event.metaKey;
+
+  if (ctrl && key.toLowerCase() === "s") {
+    event.preventDefault();
+    void saveTimeline({ manual: true });
+    return;
+  }
+  if (key === "+" || key === "=") {
+    event.preventDefault();
+    adjustTimelineZoom(+5);
+    return;
+  }
+  if (key === "-" || key === "_") {
+    event.preventDefault();
+    adjustTimelineZoom(-5);
+    return;
+  }
+  if (key === "ArrowLeft") {
+    event.preventDefault();
+    setPlayheadMs(state.timeline.playheadMs - TIMELINE_MS_PER_FRAME);
+    return;
+  }
+  if (key === "ArrowRight") {
+    event.preventDefault();
+    setPlayheadMs(state.timeline.playheadMs + TIMELINE_MS_PER_FRAME);
+    return;
+  }
+  if (key === "ArrowUp" || key === "ArrowDown") {
+    event.preventDefault();
+    const leds = getTimelineLedRows();
+    if (!leds.length) return;
+    const currentIdx = leds.findIndex((l) => l.physical_id === state.timeline.selectedRowId);
+    const delta = key === "ArrowDown" ? 1 : -1;
+    const nextIdx = Math.max(0, Math.min(leds.length - 1, (currentIdx === -1 ? 0 : currentIdx + delta)));
+    state.timeline.selectedRowId = leds[nextIdx].physical_id;
+    renderTimeline();
+    return;
+  }
+  if (key.toLowerCase() === "b") {
+    event.preventDefault();
+    splitSelectedClipsAtPlayhead();
+    return;
+  }
+  if (key === "Delete" || key === "Backspace") {
+    event.preventDefault();
+    deleteSelectedClips();
+    return;
+  }
+}
+
+async function saveTimeline({ manual = false } = {}) {
+  const t = state.timeline;
+  if (!t.dirty || t.saving || !t.loadedRecordingId) return;
+  t.saving = true;
+  setTimelineStatus("Saving…", "");
+  if (ui.timelineSaveBtn) ui.timelineSaveBtn.disabled = true;
+  try {
+    let targetId = t.loadedRecordingId;
+    if (t.isPresetSource) {
+      const copy = await api(`/api/recordings/${targetId}/duplicate`, { method: "POST" });
+      targetId = copy.id;
+      t.loadedRecordingId = copy.id;
+      t.recordingName = copy.name;
+      t.isPresetSource = false;
+      t.derivedFromId = copy.derived_from || "";
+      state.selectedRecordingId = copy.id;
+    }
+    const events = clipsToEvents(t.clips, getViewLayout());
+    await api(`/api/recordings/${targetId}`, {
+      method: "PUT",
+      body: JSON.stringify({
+        events,
+        duration_ms: Math.round(t.durationMs),
+      }),
+    });
+    t.dirty = false;
+    setTimelineStatus(manual ? "Saved ✓" : "Auto-saved ✓", "success");
+    await loadState({ silent: true, force: true });
+  } catch (error) {
+    setTimelineStatus("Save failed", "error");
+    showError(error);
+  } finally {
+    t.saving = false;
+    renderTimeline();
+  }
+}
+
+function focusTimelinePanel() {
+  if (!ui.timelinePanel) return;
+  if (document.activeElement !== ui.timelinePanel && !ui.timelinePanel.contains(document.activeElement)) {
+    ui.timelinePanel.focus({ preventScroll: true });
+  }
+}
+
+function handleTimelinePanelFocus() {
+  state.timeline.panelFocused = true;
+  ui.timelinePanel.classList.add("focused");
+}
+
+function handleTimelinePanelBlur(event) {
+  const next = event.relatedTarget;
+  if (next && ui.timelinePanel.contains(next)) return;
+  state.timeline.panelFocused = false;
+  ui.timelinePanel.classList.remove("focused");
+  clearScrubOverride();
+  if (state.timeline.dirty) void saveTimeline({ manual: false });
+}
+
+function handleTimelineApplyLength() {
+  const mins = Math.max(0, Number(ui.timelineMinutesInput.value) || 0);
+  const secs = Math.max(0, Math.min(59, Number(ui.timelineSecondsInput.value) || 0));
+  const newDur = (mins * 60 + secs) * 1000;
+  const t = state.timeline;
+  if (newDur === t.durationMs) return;
+  t.durationMs = newDur;
+  t.clips = t.clips
+    .filter((c) => c.startMs < newDur)
+    .map((c) => ({ ...c, endMs: Math.min(c.endMs, newDur) }));
+  if (t.playheadMs > newDur) t.playheadMs = newDur;
+  markTimelineDirty();
+  renderTimeline();
+}
+
+function handleTimelineZoomInput() {
+  state.timeline.pxPerMs = timelineZoomSliderToPxPerMs(ui.timelineZoomSlider.value);
+  renderTimeline();
+}
+
 function handleSceneDragOver(event) {
   const hasFiles = eventHasFiles(event);
   if (!state.editMode && !hasFiles) {
@@ -1500,6 +2330,11 @@ function handleSceneDragLeave(event) {
 function handleGlobalKeydown(event) {
   if (event.key === "Escape" && state.recordingMenuOpen) {
     closeRecordingMenu();
+    return;
+  }
+
+  if (state.timeline.panelFocused) {
+    handleTimelineKeydown(event);
     return;
   }
 
@@ -1617,8 +2452,34 @@ ui.sceneImage.addEventListener("error", () => {
 window.addEventListener("keydown", handleGlobalKeydown);
 window.addEventListener("pointerdown", handleWindowPointerDown);
 
+// Timeline bindings
+ui.timelinePanel.addEventListener("focus", handleTimelinePanelFocus);
+ui.timelinePanel.addEventListener("blur", handleTimelinePanelBlur, true);
+ui.timelinePanel.addEventListener("pointerdown", focusTimelinePanel);
+ui.timelineZoomSlider.addEventListener("input", handleTimelineZoomInput);
+ui.timelineApplyLengthBtn.addEventListener("click", handleTimelineApplyLength);
+ui.timelineSaveBtn.addEventListener("click", () => {
+  void saveTimeline({ manual: true });
+});
+ui.timelineColorR.addEventListener("click", () => applyColorToSelected([255, 0, 0]));
+ui.timelineColorG.addEventListener("click", () => applyColorToSelected([0, 255, 0]));
+ui.timelineColorB.addEventListener("click", () => applyColorToSelected([0, 0, 255]));
+ui.timelineColorW.addEventListener("click", () => applyColorToSelected([255, 255, 255]));
+ui.timelineMinutesInput.addEventListener("change", handleTimelineApplyLength);
+ui.timelineSecondsInput.addEventListener("change", handleTimelineApplyLength);
+
 async function init() {
+  // Pick a sensible initial zoom so 1 frame (~33ms) is ~20px wide.
+  const initialPxPerMs = 0.6;
+  state.timeline.pxPerMs = initialPxPerMs;
+  ui.timelineZoomSlider.value = String(timelinePxPerMsToSlider(initialPxPerMs));
+
   await loadState({ force: true });
+  if (state.selectedRecordingId) {
+    void timelineLoadFromRecordingId(state.selectedRecordingId);
+  } else {
+    renderTimeline();
+  }
 }
 
 void init();

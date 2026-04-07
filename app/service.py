@@ -520,6 +520,150 @@ class LedControlService:
             logger.info("all_off source=%s", source)
             return {"active_leds": [], "source": source}
 
+    def set_lights_bulk(self, lights: list[dict[str, Any]], source: str = "scrub") -> dict[str, Any]:
+        """Set the entire light state in one call. Used by the timeline scrubber so a
+        single playhead move does not need N HTTP requests. Anything not in the
+        payload is turned off."""
+        if not isinstance(lights, list):
+            raise ValueError("lights must be a list.")
+
+        normalized: dict[int, list[int]] = {}
+        for entry in lights:
+            if not isinstance(entry, dict):
+                raise ValueError("Each light entry must be an object.")
+            if "physical_id" not in entry:
+                raise ValueError("Each light entry must include physical_id.")
+            physical_id = clamp_int(entry["physical_id"], 1, self.settings["led_count"], "physical_id")
+            color = normalize_color(entry.get("color"))
+            normalized[physical_id] = color
+
+        with self.lock:
+            previous_ids = set(self.active_ids)
+            for physical_id in previous_ids - normalized.keys():
+                self._set_light_state(physical_id, active=False, source=source, record_event=False)
+            for physical_id, color in normalized.items():
+                self._set_light_state(physical_id, active=True, source=source, record_event=False, color=color)
+            return {
+                "active_leds": sorted(self.active_ids),
+                "source": source,
+            }
+
+    def _next_edit_name(self, base_name: str) -> str:
+        existing = {item.get("name", "") for item in self.storage.list_recordings()}
+        index = 1
+        while True:
+            candidate = f"{base_name}_EDIT_{index:02d}"
+            if candidate not in existing:
+                return candidate
+            index += 1
+
+    def duplicate_recording(self, recording_id: str) -> dict[str, Any]:
+        """Clone a recording (preset or otherwise) into a new editable copy."""
+        with self.lock:
+            source = self.storage.load_recording(recording_id)
+            if not source:
+                raise ValueError("Recording not found.")
+
+            base_name = source.get("name") or "Recording"
+            new_name = self._next_edit_name(base_name)
+            timestamp = datetime.now(timezone.utc)
+            new_id = f"{slugify(new_name)}-{timestamp.strftime('%Y%m%d%H%M%S')}"
+
+            # If the source is the random preset, materialize one cycle of events so the
+            # copy is a concrete recording rather than a generator.
+            if source.get("id") == RANDOM_PRESET_ID:
+                materialized = self._build_random_preset(
+                    random_options=source.get("random_options"),
+                    seed=None,
+                )
+                events = deepcopy(materialized["events"])
+                duration_ms = materialized.get("duration_ms", 5000)
+            else:
+                events = deepcopy(source.get("events", []))
+                duration_ms = source.get("duration_ms", 0)
+
+            payload = {
+                "id": new_id,
+                "name": new_name,
+                "created_at": timestamp.isoformat(),
+                "started_at": timestamp.isoformat(),
+                "duration_ms": duration_ms,
+                "loop_preference": bool(source.get("loop_preference", False)),
+                "derived_from": source.get("id"),
+                "events": events,
+            }
+            self.storage.save_recording(payload)
+            logger.info(
+                "recording duplicated source_id=%s new_id=%s new_name=%s",
+                source.get("id"),
+                new_id,
+                new_name,
+            )
+            return payload
+
+    def update_recording(self, recording_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        """Overwrite the events/duration of an existing non-preset recording."""
+        with self.lock:
+            existing = self.storage.load_recording(recording_id)
+            if not existing:
+                raise ValueError("Recording not found.")
+            if existing.get("is_preset"):
+                raise ValueError("Built-in presets cannot be edited. Duplicate them first.")
+
+            payload = payload or {}
+            events_payload = payload.get("events")
+            if not isinstance(events_payload, list):
+                raise ValueError("events must be a list.")
+
+            duration_ms = payload.get("duration_ms", existing.get("duration_ms", 0))
+            try:
+                duration_ms = max(0, int(duration_ms))
+            except (TypeError, ValueError) as exc:
+                raise ValueError("duration_ms must be an integer.") from exc
+
+            normalized_events = []
+            for event in events_payload:
+                if not isinstance(event, dict):
+                    raise ValueError("Each event must be an object.")
+                physical_id = clamp_int(event.get("physical_id"), 1, self.settings["led_count"], "physical_id")
+                action = str(event.get("action", "")).lower()
+                if action not in {"on", "off"}:
+                    raise ValueError("Each event action must be 'on' or 'off'.")
+                try:
+                    timestamp_ms = round(float(event.get("timestamp_ms", 0)), 3)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError("Each event timestamp_ms must be a number.") from exc
+                normalized = {
+                    "timestamp_ms": timestamp_ms,
+                    "trigger_type": str(event.get("trigger_type") or "edit"),
+                    "physical_id": physical_id,
+                    "display_name_snapshot": str(event.get("display_name_snapshot", f"LED {physical_id}")),
+                    "action": action,
+                    "active": action == "on",
+                }
+                if action == "on":
+                    normalized["color"] = normalize_color(event.get("color"))
+                normalized_events.append(normalized)
+
+            normalized_events.sort(key=lambda item: (item["timestamp_ms"], item["physical_id"]))
+
+            updated = deepcopy(existing)
+            updated["events"] = normalized_events
+            updated["duration_ms"] = duration_ms
+            updated["loop_preference"] = bool(payload.get("loop_preference", existing.get("loop_preference", False)))
+            updated["updated_at"] = datetime.now(timezone.utc).isoformat()
+            if "name" in payload and isinstance(payload["name"], str) and payload["name"].strip():
+                updated["name"] = payload["name"].strip()
+
+            self.storage.save_recording(updated)
+            logger.info(
+                "recording updated id=%s event_count=%s duration_ms=%s",
+                recording_id,
+                len(normalized_events),
+                duration_ms,
+            )
+            return updated
+
     def start_recording(self) -> dict[str, Any]:
         with self.lock:
             if self.playback_state["active"]:
