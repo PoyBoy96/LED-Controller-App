@@ -552,33 +552,29 @@ button.danger {
 }
 
 .scene-canvas-row .scene-stage {
+  max-height: min(60vh, 620px);
+}
+
+.scene-canvas-row .scene-stage {
   flex: 1 1 auto;
 }
 
 .scene-brightness-column {
+  align-self: stretch;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 10px;
-  padding: 14px 10px;
+  padding: 12px 8px;
   border-radius: 18px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(255, 255, 255, 0.04);
-  width: 64px;
+  width: 56px;
   flex: 0 0 auto;
 }
 
-.scene-brightness-column .brightness-label {
-  font-size: 0.78rem;
-  color: var(--muted);
-  writing-mode: vertical-rl;
-  transform: rotate(180deg);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
 .scene-brightness-column strong {
-  font-size: 0.95rem;
+  font-size: 0.85rem;
   color: var(--text);
 }
 
@@ -587,10 +583,11 @@ input[type="range"].vertical-slider {
   appearance: slider-vertical;
   writing-mode: vertical-lr;
   direction: rtl;
-  width: 44px;
-  height: 100%;
-  min-height: 220px;
+  width: 36px;
   flex: 1 1 auto;
+  min-height: 0;
+  height: auto;
+  align-self: stretch;
 }
 
 .timeline-playback-bar {
