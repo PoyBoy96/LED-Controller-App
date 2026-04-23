@@ -89,6 +89,30 @@ class LedControlService:
         }
         self.playback_stop_event = threading.Event()
         self.playback_thread: threading.Thread | None = None
+        self.playback_run_id = 0
+
+    def _empty_playback_state(self) -> dict[str, Any]:
+        return {
+            "active": False,
+            "recording_id": "",
+            "recording_name": "",
+            "loop": False,
+            "started_at": None,
+            "random_options": None,
+        }
+
+    def _reset_playback_state_locked(self) -> None:
+        self.playback_state = self._empty_playback_state()
+
+    def _invalidate_playback_locked(self) -> int:
+        self.playback_run_id += 1
+        return self.playback_run_id
+
+    def _is_stale_playback_run(self, run_id: int, stop_event: threading.Event) -> bool:
+        if stop_event.is_set():
+            return True
+        with self.lock:
+            return run_id != self.playback_run_id
 
     def _normalize_layout(self, payload: dict[str, Any] | None) -> dict[str, Any]:
         payload = payload or {}
@@ -513,6 +537,19 @@ class LedControlService:
             return result
 
     def all_off(self, source: str = "system") -> dict[str, Any]:
+        thread = None
+        if source == "system":
+            with self.lock:
+                self._invalidate_playback_locked()
+                if self.playback_thread and self.playback_thread.is_alive():
+                    self.playback_stop_event.set()
+                    thread = self.playback_thread
+                self.playback_thread = None
+                self._reset_playback_state_locked()
+
+        if thread:
+            thread.join(timeout=1.0)
+
         with self.lock:
             self.active_ids.clear()
             self.active_colors.clear()
@@ -782,7 +819,9 @@ class LedControlService:
                 playback_recording["generator"] = RANDOM_PRESET_ID
                 playback_recording["random_options"] = deepcopy(playback_random_options)
 
-            self.playback_stop_event = threading.Event()
+            stop_event = threading.Event()
+            run_id = self._invalidate_playback_locked()
+            self.playback_stop_event = stop_event
             self.playback_state = {
                 "active": True,
                 "recording_id": recording["id"],
@@ -791,51 +830,70 @@ class LedControlService:
                 "started_at": datetime.now(timezone.utc).isoformat(),
                 "random_options": deepcopy(playback_random_options),
             }
-            self.playback_thread = threading.Thread(
+            thread = threading.Thread(
                 target=self._run_playback,
-                args=(playback_recording, bool(loop), self.playback_stop_event),
+                args=(playback_recording, bool(loop), stop_event, run_id),
                 daemon=True,
             )
-            self.playback_thread.start()
+            self.playback_thread = thread
+            thread.start()
             logger.info(
-                "playback started recording_id=%s recording_name=%s loop=%s event_count=%s random_options=%s",
+                "playback started recording_id=%s recording_name=%s loop=%s event_count=%s random_options=%s run_id=%s",
                 recording["id"],
                 recording["name"],
                 bool(loop),
                 len(playback_recording.get("events", [])),
                 playback_random_options,
+                run_id,
             )
             return deepcopy(self.playback_state)
 
-    def _run_playback(self, recording: dict[str, Any], loop: bool, stop_event: threading.Event) -> None:
-        logger.info("playback thread running recording_id=%s loop=%s", recording.get("id"), loop)
+    def _run_playback(
+        self,
+        recording: dict[str, Any],
+        loop: bool,
+        stop_event: threading.Event,
+        run_id: int,
+    ) -> None:
+        logger.info("playback thread running recording_id=%s loop=%s run_id=%s", recording.get("id"), loop, run_id)
+        current_thread = threading.current_thread()
         try:
-            while not stop_event.is_set():
+            while not self._is_stale_playback_run(run_id, stop_event):
                 cycle_recording = recording
                 if recording.get("generator") == RANDOM_PRESET_ID:
+                    if self._is_stale_playback_run(run_id, stop_event):
+                        return
                     cycle_recording = self._build_random_preset(
                         random_options=recording.get("random_options"),
                         seed=None,
                     )
 
+                if self._is_stale_playback_run(run_id, stop_event):
+                    return
                 self.driver.clear()
                 with self.lock:
+                    if run_id != self.playback_run_id or stop_event.is_set():
+                        return
                     self.active_ids.clear()
                     self.active_colors.clear()
 
                 started_at = time.perf_counter()
                 for event in cycle_recording.get("events", []):
                     target_time = float(event.get("timestamp_ms", 0)) / 1000
-                    while not stop_event.is_set():
+                    while True:
+                        if self._is_stale_playback_run(run_id, stop_event):
+                            return
                         remaining = target_time - (time.perf_counter() - started_at)
                         if remaining <= 0:
                             break
                         time.sleep(min(remaining, 0.01))
 
-                    if stop_event.is_set():
+                    if self._is_stale_playback_run(run_id, stop_event):
                         return
 
                     with self.lock:
+                        if run_id != self.playback_run_id or stop_event.is_set():
+                            return
                         self._set_light_state(
                             int(event["physical_id"]),
                             bool(event.get("active")),
@@ -845,33 +903,25 @@ class LedControlService:
                         )
 
                 if not loop:
-                    logger.info("playback finished recording_id=%s loop=%s", recording.get("id"), loop)
+                    logger.info("playback finished recording_id=%s loop=%s run_id=%s", recording.get("id"), loop, run_id)
                     return
         finally:
             with self.lock:
-                self.playback_state = {
-                    "active": False,
-                    "recording_id": "",
-                    "recording_name": "",
-                    "loop": False,
-                    "started_at": None,
-                    "random_options": None,
-                }
+                if run_id == self.playback_run_id:
+                    self._reset_playback_state_locked()
+                    if self.playback_thread is current_thread:
+                        self.playback_thread = None
 
     def stop_playback(self, clear_lights: bool = True) -> dict[str, Any]:
         thread = None
+        stopped_run_id = None
         with self.lock:
+            stopped_run_id = self._invalidate_playback_locked()
             if self.playback_thread and self.playback_thread.is_alive():
                 self.playback_stop_event.set()
                 thread = self.playback_thread
-            self.playback_state = {
-                "active": False,
-                "recording_id": "",
-                "recording_name": "",
-                "loop": False,
-                "started_at": None,
-                "random_options": None,
-            }
+            self.playback_thread = None
+            self._reset_playback_state_locked()
 
         if thread:
             thread.join(timeout=1.0)
@@ -880,6 +930,10 @@ class LedControlService:
             self.all_off(source="system")
 
         with self.lock:
-            self.playback_thread = None
-            logger.info("playback stopped clear_lights=%s", clear_lights)
+            logger.info(
+                "playback stopped clear_lights=%s run_id=%s thread_alive=%s",
+                clear_lights,
+                stopped_run_id,
+                bool(thread and thread.is_alive()),
+            )
             return deepcopy(self.playback_state)

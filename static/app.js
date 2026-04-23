@@ -13,7 +13,6 @@ const ui = {
   recordingPickerLabel: document.getElementById("recordingPickerLabel"),
   recordingMenu: document.getElementById("recordingMenu"),
   playbackLoopToggle: document.getElementById("playbackLoopToggle"),
-  randomPlaybackControls: document.getElementById("randomPlaybackControls"),
   randomChaosSlider: document.getElementById("randomChaosSlider"),
   randomChaosValue: document.getElementById("randomChaosValue"),
   randomRgbToggle: document.getElementById("randomRgbToggle"),
@@ -56,6 +55,8 @@ const ui = {
   timelineColorG: document.getElementById("timelineColorG"),
   timelineColorB: document.getElementById("timelineColorB"),
   timelineColorW: document.getElementById("timelineColorW"),
+  timelineRandomizeBtn: document.getElementById("timelineRandomizeBtn"),
+  timelineSmartBtn: document.getElementById("timelineSmartBtn"),
   timelineZoomSlider: document.getElementById("timelineZoomSlider"),
   timelineZoomValue: document.getElementById("timelineZoomValue"),
   timelineBody: document.getElementById("timelineBody"),
@@ -107,6 +108,7 @@ const state = {
     playheadMs: 0,
     zoom: 1,
     pxPerMs: 0.6,
+    smartMode: false,
     panelFocused: false,
     dirty: false,
     saving: false,
@@ -186,7 +188,10 @@ function getViewLayout() {
 }
 
 function getRecordings() {
-  return Array.isArray(state.server?.recordings) ? state.server.recordings : [];
+  if (!Array.isArray(state.server?.recordings)) {
+    return [];
+  }
+  return state.server.recordings.filter((recording) => recording.id !== RANDOM_PLAYBACK_PRESET_ID);
 }
 
 function getSelectedRecording() {
@@ -295,12 +300,44 @@ function colorsMatch(left, right) {
 
 function getMappedLedIdsForKey(key) {
   const normalizedKey = String(key).trim().toUpperCase();
-  if (!normalizedKey || !state.server?.layout?.leds) {
+  const layout = getViewLayout();
+  if (!normalizedKey || !layout?.leds) {
     return [];
   }
-  return state.server.layout.leds
+  return layout.leds
     .filter((led) => led.key === normalizedKey)
     .map((led) => led.physical_id);
+}
+
+function isCanvasLed(led) {
+  return (
+    Boolean(led?.placed) &&
+    led?.x !== null &&
+    led?.y !== null &&
+    Number.isFinite(Number(led?.x)) &&
+    Number.isFinite(Number(led?.y))
+  );
+}
+
+function getCanvasLeds() {
+  const layout = getViewLayout();
+  if (!layout?.leds) {
+    return [];
+  }
+  return layout.leds
+    .filter((led) => isCanvasLed(led))
+    .sort((left, right) => left.physical_id - right.physical_id);
+}
+
+function sampleUniqueItems(items, count) {
+  const pool = [...items];
+  const picks = [];
+  const limit = Math.max(0, Math.min(pool.length, count));
+  for (let index = 0; index < limit; index += 1) {
+    const choiceIndex = Math.floor(Math.random() * pool.length);
+    picks.push(pool.splice(choiceIndex, 1)[0]);
+  }
+  return picks;
 }
 
 function formatLedLabel(led) {
@@ -667,7 +704,7 @@ function render() {
   const selectedRecording = getSelectedRecording();
 
   ui.modeSummary.textContent = state.editMode
-    ? "Edit mode active. Drag lights onto the scene, rename them, map keys, then save."
+    ? "Edit mode active. Drag lights onto the scene, rename them, map keys, then save. Keyboard shortcuts still preview assigned lights."
     : "Live mode active. Click a light in the list or on the scene to toggle it.";
   ui.layoutMeta.textContent = getSceneStatusText(layout, placedCount);
   ui.sidebarSummary.textContent = `${layout.leds.length} physical LEDs`;
@@ -698,11 +735,12 @@ function render() {
   ui.driverDot.classList.toggle("mock", state.server.driver.mode !== "real");
 
   renderRecordingPicker(selectedRecording);
-  renderRandomPlaybackControls(selectedRecording, playback, recording);
+  renderRandomTimelineControls({ playback, recording });
+  renderSmartTimelineButton();
 
   ui.recordBtn.disabled = recording.active || playback.active || state.editMode;
   ui.stopRecordBtn.disabled = !recording.active;
-  ui.playBtn.disabled = recording.active || state.editMode || !selectedRecording;
+  ui.playBtn.disabled = recording.active || state.editMode || (!selectedRecording && !state.timeline.loadedRecordingId);
   ui.stopPlaybackBtn.disabled = !playback.active;
   ui.deleteRecordingBtn.disabled = playback.active || !selectedRecording || selectedRecording.is_preset;
   ui.deleteRecordingBtn.title = selectedRecording?.is_preset ? "Built-in presets cannot be deleted." : "";
@@ -791,26 +829,36 @@ function renderRecordingPicker(selectedRecording) {
   });
 }
 
-function renderRandomPlaybackControls(selectedRecording, playback, recording) {
-  const visible = selectedRecording?.id === RANDOM_PLAYBACK_PRESET_ID;
-  ui.randomPlaybackControls.hidden = !visible;
-  if (!visible) {
-    return;
-  }
-
+function renderRandomTimelineControls({ playback, recording }) {
   const options = normalizeRandomPlaybackOptions(state.randomPlaybackOptions);
+  const placedLeds = getCanvasLeds();
+  const inputsDisabled = Boolean(recording.active || playback.active);
   state.randomPlaybackOptions = options;
   if (document.activeElement !== ui.randomChaosSlider) {
     ui.randomChaosSlider.value = String(options.chaos);
   }
   ui.randomChaosValue.textContent = String(options.chaos);
   ui.randomRgbToggle.checked = options.rgb;
-  const disabled = Boolean(recording.active || playback.active);
-  ui.randomChaosSlider.disabled = disabled;
-  ui.randomRgbToggle.disabled = disabled;
+  ui.randomChaosSlider.disabled = inputsDisabled || !placedLeds.length;
+  ui.randomRgbToggle.disabled = inputsDisabled || !placedLeds.length;
+  ui.timelineRandomizeBtn.disabled = inputsDisabled || !placedLeds.length;
+
+  if (!placedLeds.length) {
+    ui.randomPlaybackSummary.textContent = "Place lights on the canvas to build a random timeline or trim the editor to active scene lights.";
+    return;
+  }
+
   ui.randomPlaybackSummary.textContent = options.rgb
-    ? `Each burst lights 1-${options.chaos} LEDs, with every active LED choosing its own RGB color.`
-    : `Each burst lights 1-${options.chaos} LEDs in white.`;
+    ? `Random Timeline uses ${placedLeds.length} placed canvas lights. Chaos ${options.chaos} sets the max simultaneous lights, and RGB picks a fresh color per hit.`
+    : `Random Timeline uses ${placedLeds.length} placed canvas lights. Chaos ${options.chaos} sets the max simultaneous lights.`;
+}
+
+function renderSmartTimelineButton() {
+  const hasTimeline = Boolean(state.timeline.loadedRecordingId);
+  const hasCanvasLights = Boolean(getCanvasLeds().length);
+  ui.timelineSmartBtn.disabled = !hasTimeline || (!hasCanvasLights && !state.timeline.smartMode);
+  ui.timelineSmartBtn.classList.toggle("active", state.timeline.smartMode);
+  ui.timelineSmartBtn.setAttribute("aria-pressed", state.timeline.smartMode ? "true" : "false");
 }
 
 function renderLightingControls(settings) {
@@ -1174,10 +1222,25 @@ async function triggerKeyAssignment(key, event = null) {
   render();
 
   try {
-    await api("/api/keys/trigger", {
-      method: "POST",
-      body: JSON.stringify({ key: normalizedKey, color }),
-    });
+    if (state.editMode) {
+      await Promise.all(
+        mappedIds.map((physicalId) =>
+          api(`/api/lights/${physicalId}/set`, {
+            method: "POST",
+            body: JSON.stringify({
+              active: targetActive,
+              source: "keypress",
+              color,
+            }),
+          })
+        )
+      );
+    } else {
+      await api("/api/keys/trigger", {
+        method: "POST",
+        body: JSON.stringify({ key: normalizedKey, color }),
+      });
+    }
     await loadState({ silent: true, force: true });
   } catch (error) {
     setActiveLedIds(previousActiveIds);
@@ -1439,23 +1502,26 @@ async function saveRecording() {
 
 async function startPlayback() {
   const selectedRecording = getSelectedRecording();
-  if (!state.selectedRecordingId || !selectedRecording) {
+  const timelineRecordingId = state.timeline.loadedRecordingId;
+  const hasTimeline = Boolean(timelineRecordingId);
+
+  if (!hasTimeline && (!state.selectedRecordingId || !selectedRecording)) {
     window.alert("Select a recording first.");
     return;
   }
 
-  // Random preset no longer plays via the server — instead it generates
-  // a fresh randomized timeline locally and previews it inline.
-  if (selectedRecording.id === RANDOM_PLAYBACK_PRESET_ID) {
-    randomizeTimelineFromChaos();
-    focusTimelinePanel();
-    startTimelinePreviewPlayback();
-    return;
-  }
-
   try {
+    await stopTimelineOutput({ clearServerLights: true });
+
+    if (hasTimeline && state.timeline.dirty) {
+      await saveTimeline({ manual: false });
+      if (state.timeline.dirty) {
+        return;
+      }
+    }
+
     const payload = {
-      recording_id: state.selectedRecordingId,
+      recording_id: state.timeline.loadedRecordingId || state.selectedRecordingId,
       loop: ui.playbackLoopToggle.checked,
     };
     await api("/api/playback/start", {
@@ -1468,81 +1534,62 @@ async function startPlayback() {
   }
 }
 
-function randomizeTimelineFromChaos() {
+async function randomizeTimelineFromChaos() {
   const t = state.timeline;
-  const layout = getViewLayout();
-  const leds = (layout?.leds || []).filter((l) => Number.isFinite(l.scene_x));
+  const leds = getCanvasLeds();
   if (!leds.length) {
     window.alert("Place some lights on the scene first.");
     return;
   }
-  const opts = normalizeRandomPlaybackOptions(state.randomPlaybackOptions);
-  const chaos = Math.max(1, Math.min(10, Number(opts.chaos) || 1));
-  const useRgb = !!opts.rgb;
-
-  // Chaos drives: total length, clip count per LED, duration jitter, color variety.
-  const durationMs = Math.max(2000, Math.round(4000 + chaos * 1500));
-  const clipsPerLed = Math.max(1, Math.round(1 + chaos * 0.9));
-  const minClipFrames = Math.max(1, 6 - Math.floor(chaos / 2));
-  const maxClipFrames = 6 + chaos * 4;
-  const palette = useRgb
+  const options = normalizeRandomPlaybackOptions(state.randomPlaybackOptions);
+  const maxActive = Math.max(1, Math.min(options.chaos, leds.length));
+  const stepMs = 100;
+  const pulseMs = 65;
+  const totalSteps = 50;
+  const durationMs = totalSteps * stepMs;
+  const palette = options.rgb
     ? [[0, 255, 0], [255, 0, 0], [0, 0, 255], [255, 255, 255], [255, 255, 0], [0, 255, 255], [255, 0, 255]]
     : [[255, 255, 255]];
 
+  await stopTimelineOutput({ clearServerLights: true });
+
   const newClips = [];
   let nextId = 1;
-  for (const led of leds) {
-    for (let i = 0; i < clipsPerLed; i++) {
-      const lenFrames = Math.floor(minClipFrames + Math.random() * (maxClipFrames - minClipFrames + 1));
-      const lenMs = lenFrames * TIMELINE_MS_PER_FRAME;
-      const maxStart = Math.max(0, durationMs - lenMs);
-      const startMs = snapMsToFrame(Math.random() * maxStart);
+  for (let stepIndex = 0; stepIndex < totalSteps; stepIndex += 1) {
+    const startedAt = stepIndex * stepMs;
+    const activeCount = 1 + Math.floor(Math.random() * maxActive);
+    const activeLeds = sampleUniqueItems(leds, activeCount);
+    for (const led of activeLeds) {
       const color = palette[Math.floor(Math.random() * palette.length)];
       newClips.push({
         id: nextId++,
         ledId: led.physical_id,
-        startMs,
-        endMs: snapMsToFrame(startMs + lenMs),
+        startMs: snapMsToFrame(startedAt),
+        endMs: snapMsToFrame(startedAt + pulseMs),
         color: [...color],
       });
-    }
-  }
-  // Resolve overlaps per LED by sorting and pushing later clips after earlier ones.
-  const byLed = new Map();
-  for (const c of newClips) {
-    if (!byLed.has(c.ledId)) byLed.set(c.ledId, []);
-    byLed.get(c.ledId).push(c);
-  }
-  for (const list of byLed.values()) {
-    list.sort((a, b) => a.startMs - b.startMs);
-    for (let i = 1; i < list.length; i++) {
-      if (list[i].startMs < list[i - 1].endMs) {
-        const len = list[i].endMs - list[i].startMs;
-        list[i].startMs = list[i - 1].endMs;
-        list[i].endMs = Math.min(durationMs, list[i].startMs + len);
-      }
     }
   }
 
   t.clips = newClips;
   t.nextClipId = nextId;
   t.durationMs = durationMs;
-  t.recordingName = `Random (chaos ${chaos})`;
+  t.recordingName = `Random timeline (chaos ${maxActive})`;
   t.isPresetSource = true;
   t.loadedRecordingId = RANDOM_PLAYBACK_PRESET_ID;
   t.derivedFromId = "";
   t.selectedClipIds = new Set();
+  t.selectedRowId = leds[0]?.physical_id || 0;
   t.playheadMs = 0;
   markTimelineDirty();
-  if (ui.timelineSourceLabel) ui.timelineSourceLabel.textContent = t.recordingName;
-  if (ui.timelineMinutesInput) ui.timelineMinutesInput.value = String(Math.floor(durationMs / 60000));
-  if (ui.timelineSecondsInput) ui.timelineSecondsInput.value = String(Math.floor((durationMs % 60000) / 1000));
-  if (ui.timelinePanel) ui.timelinePanel.hidden = false;
+  updateTimelineLengthInputs();
   renderTimeline();
+  focusTimelinePanel();
 }
 
 async function stopPlayback() {
   try {
+    await stopTimelineOutput({ clearServerLights: true });
     await api("/api/playback/stop", { method: "POST" });
     await loadState({ silent: true, force: true });
   } catch (error) {
@@ -1579,6 +1626,7 @@ async function allOff() {
   render();
 
   try {
+    await stopTimelineOutput({ clearServerLights: true });
     await api("/api/lights/all-off", {
       method: "POST",
       body: JSON.stringify({ source: "system" }),
@@ -1628,15 +1676,16 @@ function tlPxToMs(px) {
 }
 
 function formatTimelineTime(ms) {
-  const total = Math.max(0, Math.round(ms));
-  const mins = Math.floor(total / 60000);
-  const secs = Math.floor((total % 60000) / 1000);
-  const rem = total % 1000;
-  return `${mins}:${String(secs).padStart(2, "0")}.${String(rem).padStart(3, "0")}`;
+  const frameNumber = Math.max(0, Math.round(ms / TIMELINE_MS_PER_FRAME));
+  const framesPerMinute = TIMELINE_FPS * 60;
+  const mins = Math.floor(frameNumber / framesPerMinute);
+  const secs = Math.floor((frameNumber % framesPerMinute) / TIMELINE_FPS);
+  const frameInSecond = frameNumber % TIMELINE_FPS;
+  return `${mins}:${String(secs).padStart(2, "0")}.${String(frameInSecond).padStart(2, "0")}`;
 }
 
 function formatTimelineFrame(ms) {
-  return `f${Math.round(ms / TIMELINE_MS_PER_FRAME)}`;
+  return `Frame ${Math.max(0, Math.round(ms / TIMELINE_MS_PER_FRAME))}`;
 }
 
 function eventsToClips(events) {
@@ -1745,7 +1794,7 @@ function loadTimelineFromRecording(recording) {
   t.nextClipId = 1;
   t.clips = eventsToClips(recording.events || []);
   t.selectedClipIds = new Set();
-  t.selectedRowId = 0;
+  t.selectedRowId = getTimelineLedRows()[0]?.physical_id || 0;
   t.playheadMs = 0;
   t.dirty = false;
   setTimelineStatus("", "");
@@ -1773,10 +1822,55 @@ function updateTimelineLengthInputs() {
   ui.timelineSecondsInput.value = String(totalSec % 60);
 }
 
+function pruneTimelineToLedIds(allowedIds) {
+  const t = state.timeline;
+  const nextClips = t.clips.filter((clip) => allowedIds.has(clip.ledId));
+  const nextClipIds = new Set(nextClips.map((clip) => clip.id));
+  const removedClipCount = t.clips.length - nextClips.length;
+  t.clips = nextClips;
+  t.selectedClipIds = new Set([...t.selectedClipIds].filter((clipId) => nextClipIds.has(clipId)));
+  if (!allowedIds.has(t.selectedRowId)) {
+    t.selectedRowId = [...allowedIds][0] || 0;
+  }
+  return removedClipCount;
+}
+
+function handleSmartTimelineClick() {
+  const t = state.timeline;
+  if (!t.loadedRecordingId) {
+    window.alert("Load or generate a timeline first.");
+    return;
+  }
+
+  if (t.smartMode) {
+    t.smartMode = false;
+    setTimelineStatus("Showing all lights in the timeline.", "");
+    renderTimeline();
+    return;
+  }
+
+  const canvasLedIds = new Set(getCanvasLeds().map((led) => led.physical_id));
+  if (!canvasLedIds.size) {
+    window.alert("Place some lights on the scene first.");
+    return;
+  }
+
+  t.smartMode = true;
+  const removedClipCount = pruneTimelineToLedIds(canvasLedIds);
+  if (removedClipCount > 0) {
+    markTimelineDirty();
+    setTimelineStatus(`Smart timeline removed ${removedClipCount} clip${removedClipCount === 1 ? "" : "s"} from unused lights.`, "");
+  } else {
+    setTimelineStatus("Smart timeline is now focused on placed canvas lights.", "success");
+  }
+  renderTimeline();
+}
+
 function getTimelineLedRows() {
   const layout = getViewLayout();
   if (!layout) return [];
-  return layout.leds.slice().sort((a, b) => a.physical_id - b.physical_id);
+  const leds = state.timeline.smartMode ? getCanvasLeds() : layout.leds;
+  return leds.slice().sort((a, b) => a.physical_id - b.physical_id);
 }
 
 function setTimelineStatus(message, tone = "") {
@@ -1805,8 +1899,13 @@ function renderTimeline() {
   panel.hidden = false;
 
   const hasRecording = Boolean(t.loadedRecordingId);
+  renderRandomTimelineControls({
+    playback: state.server?.playback || { active: false },
+    recording: state.server?.recording || { active: false },
+  });
+  renderSmartTimelineButton();
   if (!hasRecording) {
-    ui.timelineSourceLabel.textContent = "Select a recording to load the timeline.";
+    ui.timelineSourceLabel.textContent = "Select a recording or build a random timeline.";
     ui.timelineRuler.innerHTML = "";
     ui.timelineRows.innerHTML = "";
     ui.timelinePlayhead.style.display = "none";
@@ -1818,6 +1917,7 @@ function renderTimeline() {
   let suffix = "";
   if (t.isPresetSource) suffix = " · preset (first edit will save a copy)";
   else if (t.derivedFromId) suffix = " · edit copy";
+  if (t.smartMode) suffix += " · canvas lights";
   ui.timelineSourceLabel.textContent = `${t.recordingName}${suffix}`;
   ui.timelineSaveBtn.disabled = !t.dirty || t.saving;
 
@@ -1919,7 +2019,7 @@ function createClipElement(clip) {
   if (width > 50) {
     const lbl = document.createElement("span");
     lbl.className = "timeline-clip-label";
-    lbl.textContent = `${Math.round(clip.endMs - clip.startMs)}ms`;
+    lbl.textContent = `${Math.max(1, Math.round((clip.endMs - clip.startMs) / TIMELINE_MS_PER_FRAME))}f`;
     el.appendChild(lbl);
   }
 
@@ -1975,7 +2075,7 @@ async function pushScrubToServer(lights) {
   if (state.timeline.scrubInFlight) return;
   state.timeline.scrubInFlight = true;
   try {
-    while (state.timeline.pendingScrubLights) {
+    while (state.timeline.pendingScrubLights !== null) {
       const payload = state.timeline.pendingScrubLights;
       state.timeline.pendingScrubLights = null;
       await api("/api/lights/state", {
@@ -1990,10 +2090,44 @@ async function pushScrubToServer(lights) {
   }
 }
 
-function clearScrubOverride() {
+function clearScrubOverride({ renderView = true } = {}) {
   if (state.scrubOverride) {
     state.scrubOverride = null;
-    if (state.server) render();
+    if (renderView && state.server) render();
+  }
+}
+
+async function stopTimelineOutput({ clearServerLights = true } = {}) {
+  const t = state.timeline;
+  const hadTimelineOutput = Boolean(t.previewRafId || t.scrubRafId || state.scrubOverride || t.scrubInFlight || t.pendingScrubLights !== null);
+
+  if (t.previewRafId) {
+    cancelAnimationFrame(t.previewRafId);
+    t.previewRafId = null;
+  }
+  if (t.scrubRafId) {
+    cancelAnimationFrame(t.scrubRafId);
+    t.scrubRafId = null;
+  }
+
+  if (clearServerLights) {
+    if (t.scrubInFlight) {
+      t.pendingScrubLights = [];
+    } else {
+      await pushScrubToServer([]);
+    }
+    if (state.server) {
+      state.server.active_leds = [];
+      state.server.active_led_colors = {};
+    }
+  } else {
+    t.pendingScrubLights = null;
+  }
+
+  clearScrubOverride({ renderView: false });
+
+  if (hadTimelineOutput && state.server) {
+    render();
   }
 }
 
@@ -2301,7 +2435,7 @@ function handleTimelineKeydown(event) {
 function toggleTimelinePreviewPlayback() {
   const t = state.timeline;
   if (t.previewRafId) {
-    stopTimelinePreviewPlayback();
+    void stopTimelineOutput({ clearServerLights: true });
   } else {
     startTimelinePreviewPlayback();
   }
@@ -2318,7 +2452,7 @@ function startTimelinePreviewPlayback() {
     const ms = t.previewStartMs + elapsed;
     if (ms >= t.durationMs) {
       setPlayheadMs(t.durationMs);
-      stopTimelinePreviewPlayback();
+      void stopTimelineOutput({ clearServerLights: true });
       return;
     }
     setPlayheadMs(ms);
@@ -2328,11 +2462,7 @@ function startTimelinePreviewPlayback() {
 }
 
 function stopTimelinePreviewPlayback() {
-  const t = state.timeline;
-  if (t.previewRafId) {
-    cancelAnimationFrame(t.previewRafId);
-    t.previewRafId = null;
-  }
+  return stopTimelineOutput({ clearServerLights: true });
 }
 
 async function saveTimeline({ manual = false } = {}) {
@@ -2389,7 +2519,7 @@ function handleTimelinePanelBlur(event) {
   if (next && ui.timelinePanel.contains(next)) return;
   state.timeline.panelFocused = false;
   ui.timelinePanel.classList.remove("focused");
-  clearScrubOverride();
+  void stopTimelineOutput({ clearServerLights: true });
   if (state.timeline.dirty) void saveTimeline({ manual: false });
 }
 
@@ -2465,7 +2595,7 @@ function handleGlobalKeydown(event) {
     return;
   }
 
-  if (state.editMode || !state.server || event.repeat || event.metaKey) {
+  if (!state.server || event.repeat || event.metaKey) {
     return;
   }
 
@@ -2546,6 +2676,8 @@ ui.buildGridBtn.addEventListener("click", handleBuildGrid);
 ui.resetLayoutBtn.addEventListener("click", handleResetLayout);
 ui.randomChaosSlider.addEventListener("input", handleRandomChaosInput);
 ui.randomRgbToggle.addEventListener("change", handleRandomRgbToggle);
+ui.timelineRandomizeBtn.addEventListener("click", randomizeTimelineFromChaos);
+ui.timelineSmartBtn.addEventListener("click", handleSmartTimelineClick);
 ui.brightnessSlider.addEventListener("input", handleLightingInput);
 ui.brightnessSlider.addEventListener("change", handleLightingCommit);
 ui.sceneStage.addEventListener("dragover", handleSceneDragOver);

@@ -137,8 +137,8 @@
             <input id="playbackLoopToggle" type="checkbox" />
             Loop
           </label>
-          <div id="randomPlaybackControls" class="timeline-random-controls" hidden>
-            <label class="range-field" for="randomChaosSlider">
+          <div class="timeline-random-controls">
+            <label class="range-field timeline-random-label" for="randomChaosSlider">
               <span>Chaos</span>
               <strong id="randomChaosValue">1</strong>
             </label>
@@ -147,19 +147,25 @@
               <input id="randomRgbToggle" type="checkbox" />
               Random RGB
             </label>
+            <button id="timelineRandomizeBtn" class="accent" type="button">Random Timeline</button>
           </div>
           <div class="meta-row" id="playbackSummary">Playback idle</div>
-          <div class="meta-row" id="randomPlaybackSummary" hidden>Play randomizes timeline.</div>
         </div>
         <div class="timeline-header">
           <div class="timeline-title">
-            <h2>Timeline</h2>
-            <p id="timelineSourceLabel">Select a recording to load the timeline.</p>
+            <div class="timeline-title-row">
+              <h2>Timeline</h2>
+              <button id="timelineSmartBtn" type="button">Smart Timeline</button>
+            </div>
+            <p id="timelineSourceLabel">Select a recording or build a random timeline.</p>
+            <div class="timeline-generator-summary" id="randomPlaybackSummary">
+              Random timeline uses the lights placed on the canvas.
+            </div>
           </div>
           <div class="timeline-toolbar">
             <div class="timeline-time-display">
-              <strong id="timelineTimeDisplay">0:00.000</strong>
-              <span class="timeline-frame-display" id="timelineFrameDisplay">f0</span>
+              <strong id="timelineTimeDisplay">0:00.00</strong>
+              <span class="timeline-frame-display" id="timelineFrameDisplay">Frame 0</span>
             </div>
             <label class="compact-field" for="timelineMinutesInput">
               <span>min</span>

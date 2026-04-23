@@ -607,16 +607,45 @@ input[type="range"].vertical-slider {
 
 .timeline-random-controls {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
-  padding: 6px 12px;
+  padding: 6px 10px;
   border-radius: 12px;
   border: 1px solid rgba(255, 255, 255, 0.08);
   background: rgba(255, 255, 255, 0.04);
 }
 
 .timeline-random-controls input[type="range"] {
-  width: 140px;
+  width: 104px;
+  height: 32px;
+  margin: 0;
+}
+
+.timeline-random-label {
+  min-width: 74px;
+}
+
+.timeline-title-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.timeline-title-row h2 {
+  margin: 0;
+}
+
+#timelineSmartBtn.active {
+  border-color: rgba(255, 193, 74, 0.45);
+  box-shadow: inset 0 0 0 1px rgba(255, 193, 74, 0.18);
+  background: rgba(255, 193, 74, 0.12);
+}
+
+.timeline-generator-summary {
+  color: var(--muted);
+  font-size: 0.78rem;
+  line-height: 1.4;
 }
 
 .scene-key {
