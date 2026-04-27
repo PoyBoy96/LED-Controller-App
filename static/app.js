@@ -128,6 +128,8 @@ const state = {
     clipboard: null,
     lastRecordUndo: null,
     recordSession: null,
+    undoStack: [],
+    redoStack: [],
   },
   scrubOverride: null,
 };
@@ -164,6 +166,7 @@ const DEFAULT_RANDOM_PLAYBACK_OPTIONS = {
   rgb: false,
 };
 const MAX_BRIGHTNESS = 255;
+const TIMELINE_HISTORY_LIMIT = 100;
 
 async function api(path, options = {}) {
   const config = {
@@ -1599,6 +1602,7 @@ async function randomizeTimelineFromChaos() {
     : [[255, 255, 255]];
 
   await stopTimelineOutput({ clearServerLights: true });
+  pushTimelineUndoSnapshot();
 
   const newClips = [];
   let nextId = 1;
@@ -1963,6 +1967,7 @@ function loadTimelineFromRecording(recording) {
   t.clipboard = null;
   t.lastRecordUndo = null;
   t.recordSession = null;
+  clearTimelineHistory();
   setTimelineOverlayMessage("");
   setTimelineStatus("", "");
   updateTimelineLengthInputs();
@@ -1985,6 +1990,7 @@ function resetTimelineData() {
   t.clipboard = null;
   t.lastRecordUndo = null;
   t.recordSession = null;
+  clearTimelineHistory();
   setTimelineOverlayMessage("");
 }
 
@@ -2018,6 +2024,7 @@ function handleSmartTimelineClick() {
   }
 
   if (t.smartMode) {
+    pushTimelineUndoSnapshot();
     t.smartMode = false;
     setTimelineStatus("Showing all lights in the timeline.", "");
     renderTimeline();
@@ -2030,6 +2037,7 @@ function handleSmartTimelineClick() {
     return;
   }
 
+  pushTimelineUndoSnapshot();
   t.smartMode = true;
   const removedClipCount = pruneTimelineToLedIds(canvasLedIds);
   if (removedClipCount > 0) {
@@ -2418,6 +2426,8 @@ function handleClipPointerDown(event) {
   }
 
   const startClientX = event.clientX;
+  const undoSnapshot = makeTimelineUndoSnapshot();
+  let didChange = false;
   const startSnapshot = new Map();
   for (const id of t.selectedClipIds) {
     const c = t.clips.find((x) => x.id === id);
@@ -2427,14 +2437,17 @@ function handleClipPointerDown(event) {
   const onMove = (e) => {
     const deltaPx = e.clientX - startClientX;
     const deltaMs = tlPxToMs(deltaPx);
-    applyDragToSelection(mode, startSnapshot, deltaMs);
+    didChange = applyDragToSelection(mode, startSnapshot, deltaMs) || didChange;
     updateTimelineClipPositionsOnly();
   };
   const onUp = () => {
     clipEl.removeEventListener("pointermove", onMove);
     clipEl.removeEventListener("pointerup", onUp);
     clipEl.removeEventListener("lostpointercapture", onUp);
-    markTimelineDirty();
+    if (didChange) {
+      pushTimelineUndoSnapshot(undoSnapshot);
+      markTimelineDirty();
+    }
     renderTimeline();
   };
   clipEl.addEventListener("pointermove", onMove);
@@ -2445,6 +2458,7 @@ function handleClipPointerDown(event) {
 function applyDragToSelection(mode, startSnapshot, deltaMs) {
   const t = state.timeline;
   const frame = TIMELINE_MS_PER_FRAME;
+  let changed = false;
   for (const [id, orig] of startSnapshot) {
     const clip = t.clips.find((c) => c.id === id);
     if (!clip) continue;
@@ -2462,20 +2476,33 @@ function applyDragToSelection(mode, startSnapshot, deltaMs) {
       let newStart = orig.startMs + deltaMs;
       newStart = Math.max(minStart, Math.min(maxEnd - len, newStart));
       newStart = snapMsToFrame(newStart);
+      const nextEnd = newStart + len;
+      if (clip.startMs !== newStart || clip.endMs !== nextEnd) {
+        changed = true;
+      }
       clip.startMs = newStart;
-      clip.endMs = newStart + len;
+      clip.endMs = nextEnd;
     } else if (mode === "trim-start") {
       let newStart = orig.startMs + deltaMs;
       newStart = Math.max(minStart, Math.min(orig.endMs - frame, newStart));
-      clip.startMs = snapMsToFrame(newStart);
+      const snappedStart = snapMsToFrame(newStart);
+      if (clip.startMs !== snappedStart) {
+        changed = true;
+      }
+      clip.startMs = snappedStart;
       if (clip.endMs - clip.startMs < frame) clip.startMs = clip.endMs - frame;
     } else if (mode === "trim-end") {
       let newEnd = orig.endMs + deltaMs;
       newEnd = Math.max(orig.startMs + frame, Math.min(maxEnd, newEnd));
-      clip.endMs = snapMsToFrame(newEnd);
+      const snappedEnd = snapMsToFrame(newEnd);
+      if (clip.endMs !== snappedEnd) {
+        changed = true;
+      }
+      clip.endMs = snappedEnd;
       if (clip.endMs - clip.startMs < frame) clip.endMs = clip.startMs + frame;
     }
   }
+  return changed;
 }
 
 function markTimelineDirty() {
@@ -2502,6 +2529,59 @@ function makeTimelineUndoSnapshot() {
   };
 }
 
+function getTimelineSnapshotKey(snapshot) {
+  return JSON.stringify({
+    loadedRecordingId: snapshot.loadedRecordingId || "",
+    recordingName: snapshot.recordingName || "",
+    isPresetSource: Boolean(snapshot.isPresetSource),
+    derivedFromId: snapshot.derivedFromId || "",
+    durationMs: Number(snapshot.durationMs) || 0,
+    playheadMs: Number(snapshot.playheadMs) || 0,
+    selectedRowId: Number(snapshot.selectedRowId) || 0,
+    selectedClipIds: [...(snapshot.selectedClipIds || [])].map(Number).sort((a, b) => a - b),
+    smartMode: Boolean(snapshot.smartMode),
+    dirty: Boolean(snapshot.dirty),
+    nextClipId: Number(snapshot.nextClipId) || 1,
+    clips: (snapshot.clips || []).map((clip) => ({
+      id: Number(clip.id),
+      ledId: Number(clip.ledId),
+      startMs: Number(clip.startMs),
+      endMs: Number(clip.endMs),
+      color: Array.isArray(clip.color) ? clip.color.map(Number) : [255, 255, 255],
+    })),
+  });
+}
+
+function clearTimelineHistory() {
+  state.timeline.undoStack = [];
+  state.timeline.redoStack = [];
+}
+
+function pushTimelineUndoSnapshot(snapshot = makeTimelineUndoSnapshot()) {
+  const t = state.timeline;
+  const nextKey = getTimelineSnapshotKey(snapshot);
+  const last = t.undoStack[t.undoStack.length - 1];
+  if (!last || getTimelineSnapshotKey(last) !== nextKey) {
+    t.undoStack.push(snapshot);
+    if (t.undoStack.length > TIMELINE_HISTORY_LIMIT) {
+      t.undoStack.shift();
+    }
+  }
+  t.redoStack = [];
+}
+
+function pushTimelineRedoSnapshot(snapshot = makeTimelineUndoSnapshot()) {
+  const t = state.timeline;
+  const nextKey = getTimelineSnapshotKey(snapshot);
+  const last = t.redoStack[t.redoStack.length - 1];
+  if (!last || getTimelineSnapshotKey(last) !== nextKey) {
+    t.redoStack.push(snapshot);
+    if (t.redoStack.length > TIMELINE_HISTORY_LIMIT) {
+      t.redoStack.shift();
+    }
+  }
+}
+
 function restoreTimelineUndoSnapshot(snapshot) {
   if (!snapshot) return;
   const t = state.timeline;
@@ -2524,6 +2604,48 @@ function restoreTimelineUndoSnapshot(snapshot) {
   updateTimelineLengthInputs();
 }
 
+function undoTimelineEdit() {
+  const t = state.timeline;
+  if (!t.undoStack.length) {
+    setTimelineStatus("Nothing to undo.", "");
+    return false;
+  }
+  pushTimelineRedoSnapshot(makeTimelineUndoSnapshot());
+  const snapshot = t.undoStack.pop();
+  restoreTimelineUndoSnapshot(snapshot);
+  t.lastRecordUndo = null;
+  setTimelineOverlayMessage("");
+  renderTimeline();
+  applyScrubOverrideFromMs(t.playheadMs);
+  setTimelineStatus("Undo", "success");
+  return true;
+}
+
+function redoTimelineEdit() {
+  const t = state.timeline;
+  if (!t.redoStack.length) {
+    setTimelineStatus("Nothing to redo.", "");
+    return false;
+  }
+  const snapshot = t.redoStack.pop();
+  const currentSnapshot = makeTimelineUndoSnapshot();
+  const currentKey = getTimelineSnapshotKey(currentSnapshot);
+  const lastUndo = t.undoStack[t.undoStack.length - 1];
+  if (!lastUndo || getTimelineSnapshotKey(lastUndo) !== currentKey) {
+    t.undoStack.push(currentSnapshot);
+    if (t.undoStack.length > TIMELINE_HISTORY_LIMIT) {
+      t.undoStack.shift();
+    }
+  }
+  restoreTimelineUndoSnapshot(snapshot);
+  t.lastRecordUndo = null;
+  setTimelineOverlayMessage("");
+  renderTimeline();
+  applyScrubOverrideFromMs(t.playheadMs);
+  setTimelineStatus("Redo", "success");
+  return true;
+}
+
 function insertTimelineClipAtPlayhead(color) {
   if (!ensureTimelineHasTargetRow()) {
     return null;
@@ -2541,6 +2663,7 @@ function insertTimelineClipAtPlayhead(color) {
     return null;
   }
 
+  pushTimelineUndoSnapshot();
   const newClip = {
     id: t.nextClipId++,
     ledId: rowId,
@@ -2563,6 +2686,7 @@ function applyColorToSelected(color) {
     insertTimelineClipAtPlayhead(color);
     return;
   }
+  pushTimelineUndoSnapshot();
   for (const clip of t.clips) {
     if (t.selectedClipIds.has(clip.id)) clip.color = [...color];
   }
@@ -2627,6 +2751,7 @@ function pasteTimelinePatternAtPlayhead() {
     return;
   }
 
+  pushTimelineUndoSnapshot();
   t.clips = buildOverwriteMergedClips(t.clips, incoming);
   t.selectedClipIds = new Set(incoming.map((clip) => clip.id));
   t.selectedRowId = incoming[0].ledId;
@@ -2808,6 +2933,7 @@ function stopTimelineRecordSession({ keepChanges = true, reason = "" } = {}) {
     closeAllTimelineRecordClips(session, getTimelineRecordCoverageEndMs(session.currentMs));
     t.clips = buildTimelineClipsForRecordSession(session);
     if (session.overwriteStartMsByLed.size) {
+      pushTimelineUndoSnapshot(session.undoSnapshot);
       t.lastRecordUndo = session.undoSnapshot;
       markTimelineDirty();
       setTimelineStatus(
@@ -2940,6 +3066,7 @@ function undoLastTimelineRecord() {
 function splitSelectedClipsAtPlayhead() {
   const t = state.timeline;
   const playhead = snapMsToFrame(t.playheadMs);
+  const undoSnapshot = makeTimelineUndoSnapshot();
   const newClips = [];
   const newSelection = new Set();
   let didSplit = false;
@@ -2970,6 +3097,7 @@ function splitSelectedClipsAtPlayhead() {
     }
   }
   if (didSplit) {
+    pushTimelineUndoSnapshot(undoSnapshot);
     t.clips = newClips;
     t.selectedClipIds = newSelection;
     markTimelineDirty();
@@ -2980,6 +3108,7 @@ function splitSelectedClipsAtPlayhead() {
 function deleteSelectedClips() {
   const t = state.timeline;
   if (!t.selectedClipIds.size) return;
+  pushTimelineUndoSnapshot();
   t.clips = t.clips.filter((c) => !t.selectedClipIds.has(c.id));
   t.selectedClipIds.clear();
   markTimelineDirty();
@@ -3032,6 +3161,16 @@ function handleTimelineKeydown(event) {
   if (ctrl && key.toLowerCase() === "s") {
     event.preventDefault();
     void saveTimeline({ manual: true });
+    return;
+  }
+  if (ctrl && !event.shiftKey && key.toLowerCase() === "z") {
+    event.preventDefault();
+    undoTimelineEdit();
+    return;
+  }
+  if ((ctrl && event.shiftKey && key.toLowerCase() === "z") || (ctrl && key.toLowerCase() === "y")) {
+    event.preventDefault();
+    redoTimelineEdit();
     return;
   }
   if (ctrl && key.toLowerCase() === "c") {
@@ -3101,20 +3240,28 @@ function toggleTimelinePreviewPlayback() {
   }
 }
 
+function shouldLoopTimelinePlayback() {
+  return Boolean(ui.playbackLoopToggle?.checked);
+}
+
 function startTimelinePreviewPlayback() {
   const t = state.timeline;
   if (t.previewRafId) return;
+  if (t.durationMs <= 0) return;
   if (t.playheadMs >= t.durationMs) t.playheadMs = 0;
   t.previewStartWall = performance.now();
   t.previewStartMs = t.playheadMs;
   const tick = () => {
     const elapsed = performance.now() - t.previewStartWall;
-    const ms = t.previewStartMs + elapsed;
-    if (ms >= t.durationMs) {
+    const rawMs = t.previewStartMs + elapsed;
+    if (!shouldLoopTimelinePlayback() && rawMs >= t.durationMs) {
       setPlayheadMs(t.durationMs);
       void stopTimelineOutput({ clearServerLights: true });
       return;
     }
+    const ms = shouldLoopTimelinePlayback()
+      ? (rawMs % t.durationMs)
+      : rawMs;
     setPlayheadMs(ms);
     t.previewRafId = requestAnimationFrame(tick);
   };
@@ -3193,6 +3340,7 @@ function handleTimelineApplyLength() {
   const newDur = (mins * 60 + secs) * 1000;
   const t = state.timeline;
   if (newDur === t.durationMs) return;
+  pushTimelineUndoSnapshot();
   t.durationMs = newDur;
   t.clips = t.clips
     .filter((c) => c.startMs < newDur)
