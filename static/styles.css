@@ -1149,6 +1149,12 @@ input[type="range"].vertical-slider {
   color: var(--text);
 }
 
+.timeline-row.row-primary .timeline-row-label {
+  background: rgba(255, 193, 74, 0.28);
+  color: var(--text);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+
 .timeline-row-label {
   position: sticky;
   left: 0;
@@ -1163,6 +1169,8 @@ input[type="range"].vertical-slider {
   font-size: 0.8rem;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  user-select: none;
 }
 
 .timeline-row-track {
@@ -1280,6 +1288,10 @@ input[type="range"].vertical-slider {
   background: rgba(255, 193, 74, 0.1);
   pointer-events: none;
   z-index: 5;
+}
+
+.timeline-body.marquee-selecting {
+  cursor: crosshair;
 }
 
 .scene-led.timeline-selected {
