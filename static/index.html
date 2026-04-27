@@ -176,6 +176,9 @@
               <input id="timelineSecondsInput" type="number" min="0" max="59" step="1" value="0" />
             </label>
             <button id="timelineApplyLengthBtn" type="button">Set length</button>
+            <button id="timelineNewBtn" type="button">Start New Timeline</button>
+            <button id="timelineRecordBtn" class="accent" type="button">Record At Playhead</button>
+            <button id="timelineRecordUndoBtn" type="button">Back</button>
             <button id="timelineSaveBtn" type="button" class="accent">Save</button>
             <span class="timeline-save-status" id="timelineSaveStatus" aria-live="polite"></span>
           </div>
@@ -183,10 +186,10 @@
 
         <div class="timeline-color-bar">
           <div class="timeline-color-buttons">
-            <button id="timelineColorR" class="timeline-color-btn timeline-color-r" type="button" title="Set selected to Red">R</button>
-            <button id="timelineColorG" class="timeline-color-btn timeline-color-g" type="button" title="Set selected to Green">G</button>
-            <button id="timelineColorB" class="timeline-color-btn timeline-color-b" type="button" title="Set selected to Blue">B</button>
-            <button id="timelineColorW" class="timeline-color-btn timeline-color-w" type="button" title="Set selected to White">W</button>
+            <button id="timelineColorR" class="timeline-color-btn timeline-color-r" type="button" title="Color the selected clip red or add a red clip at the playhead">R</button>
+            <button id="timelineColorG" class="timeline-color-btn timeline-color-g" type="button" title="Color the selected clip green or add a green clip at the playhead">G</button>
+            <button id="timelineColorB" class="timeline-color-btn timeline-color-b" type="button" title="Color the selected clip blue or add a blue clip at the playhead">B</button>
+            <button id="timelineColorW" class="timeline-color-btn timeline-color-w" type="button" title="Color the selected clip white or add a white clip at the playhead">W</button>
           </div>
           <div class="timeline-zoom-stack">
             <label class="range-field" for="timelineZoomSlider">
@@ -195,12 +198,32 @@
             </label>
             <input id="timelineZoomSlider" type="range" min="0" max="100" step="1" value="40" />
           </div>
-          <div class="timeline-shortcut-hint" id="timelineShortcutHint">
-            Click timeline to focus. + / - zoom. ← → step frame. ↑ ↓ select row. B split. Del remove. Ctrl+S save.
+          <div class="timeline-shortcut-popover">
+            <button id="timelineShortcutInfoBtn" class="timeline-info-btn" type="button" aria-label="Timeline shortcuts">
+              ⓘ
+            </button>
+            <div class="timeline-shortcut-card" id="timelineShortcutHint">
+              <strong>Timeline Shortcuts</strong>
+              <ul>
+                <li><kbd>Click</kbd> Select a clip</li>
+                <li><kbd>Ctrl</kbd> + <kbd>Click</kbd> Add/remove clip selection</li>
+                <li><kbd>Ctrl</kbd> + <kbd>C</kbd> Copy selected pattern</li>
+                <li><kbd>Ctrl</kbd> + <kbd>V</kbd> Paste at playhead</li>
+                <li><kbd>Ctrl</kbd> + <kbd>S</kbd> Save timeline</li>
+                <li><kbd>R</kbd> <kbd>G</kbd> <kbd>B</kbd> <kbd>W</kbd> buttons recolor selection or add at playhead</li>
+                <li><kbd>Space</kbd> Preview from playhead</li>
+                <li><kbd>←</kbd> <kbd>→</kbd> Step one frame</li>
+                <li><kbd>↑</kbd> <kbd>↓</kbd> Change selected layer</li>
+                <li><kbd>B</kbd> Split selected clips at playhead</li>
+                <li><kbd>Del</kbd> Remove selected clips</li>
+                <li><kbd>Esc</kbd> Stop timeline recording</li>
+              </ul>
+            </div>
           </div>
         </div>
 
         <div class="timeline-body" id="timelineBody">
+          <div class="timeline-overlay" id="timelineOverlay" hidden></div>
           <div class="timeline-content" id="timelineContent">
             <div class="timeline-ruler-row">
               <div class="timeline-corner"></div>
